@@ -1,0 +1,9 @@
+##gff-version 3
+chr1	test	gene	6500	9500	.	+	.	ID=gene1;Name=GENEB
+chr1	test	mRNA	6500	9500	.	+	.	ID=tx1;Parent=gene1;Name=GENEB-201
+chr1	test	exon	6500	6800	.	+	.	ID=ex1;Parent=tx1
+chr1	test	exon	9200	9500	.	+	.	ID=ex2;Parent=tx1
+chr1	test	gene	3000	5600	.	-	.	ID=gene0;Name=GENEA
+chr1	test	mRNA	3000	5600	.	-	.	ID=tx0;Parent=gene0;Name=GENEA-201
+chr1	test	exon	3000	3400	.	-	.	ID=ex0;Parent=tx0
+chr1	test	exon	5300	5600	.	-	.	ID=ex3;Parent=tx0
