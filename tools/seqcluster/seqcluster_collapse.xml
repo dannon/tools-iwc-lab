@@ -1,0 +1,139 @@
+<tool id="seqcluster_collapse" name="seqcluster collapse" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>identical small RNA reads into unique sequences with counts</description>
+    <macros>
+        <token name="@TOOL_VERSION@">1.2.9</token>
+        <token name="@VERSION_SUFFIX@">0</token>
+        <token name="@PROFILE@">25.1</token>
+    </macros>
+    <xrefs>
+        <xref type="bio.tools">seqcluster</xref>
+    </xrefs>
+    <requirements>
+        <requirement type="package" version="@TOOL_VERSION@">seqcluster</requirement>
+    </requirements>
+    <version_command><![CDATA[seqcluster --version 2>&1 | tail -n 1]]></version_command>
+    <command detect_errors="aggressive"><![CDATA[
+## seqcluster picks gzip vs plain text from the file extension, and names its
+## output after the input basename
+#if $input.is_of_type('fastqsanger.gz')
+    #set $reads = 'reads.fastq.gz'
+#else
+    #set $reads = 'reads.fastq'
+#end if
+ln -s '$input' '$reads' &&
+mkdir -p collapsed &&
+seqcluster collapse
+    --fastq '$reads'
+    --min $min
+    --out collapsed
+&& mv collapsed/reads_trimmed.fastq '$output'
+    ]]></command>
+    <inputs>
+        <param name="input" type="data" format="fastqsanger,fastqsanger.gz" label="Trimmed small RNA reads" help="Adapter-trimmed reads. Reads of 15 nt or shorter are dropped."/>
+        <param argument="--min" type="integer" min="1" value="1" label="Minimum number of copies" help="Unique sequences seen fewer times than this are dropped. Values above 1 can bias downstream analysis."/>
+    </inputs>
+    <outputs>
+        <data name="output" format="fastqsanger" label="${tool.name} on ${on_string}: collapsed reads"/>
+    </outputs>
+    <tests>
+        <!-- defaults: the 12 nt read is dropped, three unique 22 nt sequences remain -->
+        <test expect_num_outputs="1">
+            <param name="input" value="reads.fastq" ftype="fastqsanger"/>
+            <output name="output" ftype="fastqsanger">
+                <assert_contents>
+                    <has_n_lines n="12"/>
+                    <has_line line="@seq_1_x3"/>
+                    <has_line line="@seq_2_x2"/>
+                    <has_line line="@seq_3_x1"/>
+                    <has_line line="TGAGGTAGTAGGTTGTATAGTT"/>
+                    <has_line line="TGGAATGTAAAGAAGTATGTAT"/>
+                    <not_has_text text="ACGTACGTACGT"/>
+                    <!-- per-position mean of the merged qualities: F, I, F gives G; ?, I gives D -->
+                    <has_line line="GGGGGGGGGGGGGGGGGGGGGG"/>
+                    <has_line line="DDDDDDDDDDDDDDDDDDDDDD"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- UMI-tagged read names: counts are distinct UMIs per sequence, not reads -->
+        <test expect_num_outputs="1">
+            <param name="input" value="umi_reads.fastq" ftype="fastqsanger"/>
+            <output name="output" ftype="fastqsanger">
+                <assert_contents>
+                    <has_n_lines n="8"/>
+                    <has_line line="@seq_1_x2"/>
+                    <has_line line="@seq_2_x1"/>
+                    <not_has_text text="_x3"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- gzipped input, and singletons dropped by the minimum count -->
+        <test expect_num_outputs="1">
+            <param name="input" value="reads.fastq.gz" ftype="fastqsanger.gz"/>
+            <param name="min" value="2"/>
+            <output name="output" ftype="fastqsanger">
+                <assert_contents>
+                    <has_n_lines n="8"/>
+                    <has_line line="@seq_1_x3"/>
+                    <has_line line="@seq_2_x2"/>
+                    <not_has_text text="_x1"/>
+                    <not_has_text text="TGGAATGTAAAGAAGTATGTAT"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+`seqcluster collapse` merges identical reads in a small RNA FASTQ file into one record per unique
+sequence. This is the collapsing step used by nf-core/smrnaseq before mapping reads for seqcluster
+and mirtop.
+
+Each output record is named `seq_<index>_x<count>`, where `<count>` is the number of input reads
+with that sequence. The quality string is the per-position average of the merged reads' qualities.
+The index counts every unique sequence, including ones that were filtered out, so it can have gaps.
+
+## Input
+
+Adapter-trimmed small RNA reads in four-line FASTQ format (plain or gzipped).
+
+- Reads of 15 nt or shorter are always dropped. seqcluster 1.2.9 hard-codes this cutoff, so its
+  `--min_size` option has no effect and is not offered here.
+- UMI mode is switched on when the first read name contains `UMI_<sequence>` (for example after
+  UMI extraction). Reads are first collapsed per UMI and sequence, then per sequence, so
+  `<count>` becomes the number of distinct UMIs seen with that sequence, not the number of reads.
+  The minimum count applies at both stages. In this mode every read name must carry a UMI tag, or
+  the job fails.
+
+## Output
+
+A FASTQ file with one record per unique sequence that passes the length and minimum-count filters.
+The file is empty if no sequence passes.
+
+## Example
+
+Input reads:
+
+```
+@read1
+TGAGGTAGTAGGTTGTATAGTT
++
+FFFFFFFFFFFFFFFFFFFFFF
+@read2
+TGAGGTAGTAGGTTGTATAGTT
++
+JJJJJJJJJJJJJJJJJJJJJJ
+```
+
+Output:
+
+```
+@seq_1_x2
+TGAGGTAGTAGGTTGTATAGTT
++
+HHHHHHHHHHHHHHHHHHHHHH
+```
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1093/bioinformatics/btr527</citation>
+    </citations>
+</tool>
