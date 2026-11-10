@@ -1,0 +1,441 @@
+<tool id="rmats" name="rMATS" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>detect differential alternative splicing between two groups of RNA-seq BAMs</description>
+    <macros>
+        <token name="@TOOL_VERSION@">4.4.0</token>
+        <token name="@VERSION_SUFFIX@">0</token>
+        <token name="@PROFILE@">25.1</token>
+        <xml name="event_tables" tokens="counts">
+            <data name="SE" format="tabular" from_work_dir="out/SE.MATS.@COUNTS@.txt"/>
+            <data name="A5SS" format="tabular" from_work_dir="out/A5SS.MATS.@COUNTS@.txt"/>
+            <data name="A3SS" format="tabular" from_work_dir="out/A3SS.MATS.@COUNTS@.txt"/>
+            <data name="MXE" format="tabular" from_work_dir="out/MXE.MATS.@COUNTS@.txt"/>
+            <data name="RI" format="tabular" from_work_dir="out/RI.MATS.@COUNTS@.txt"/>
+        </xml>
+    </macros>
+    <xrefs>
+        <xref type="bio.tools">rmats</xref>
+    </xrefs>
+    <requirements>
+        <requirement type="package" version="@TOOL_VERSION@">rmats</requirement>
+        <!-- PAIRADISE backs the paired statistical model -->
+        <requirement type="package" version="1.0.0">r-pairadise</requirement>
+    </requirements>
+    <stdio>
+        <exit_code range="1:" level="fatal"/>
+        <!-- rmats exits 0 when the paired model fails and leaves header-only tables behind -->
+        <regex match="error in paired model" source="stderr" level="fatal" description="The PAIRADISE paired statistical model failed"/>
+        <!-- likewise for the helper scripts of the unpaired test, which it starts without checking their exit codes -->
+        <regex match="Traceback \(most recent call last\)" source="stderr" level="fatal" description="An rMATS helper script crashed"/>
+    </stdio>
+    <version_command>rmats.py --version</version_command>
+    <command><![CDATA[
+#set $g1 = []
+#for $bam in $group1:
+    #if $bam:
+        #silent $g1.append(str($bam))
+    #end if
+#end for
+#set $g2 = []
+#for $bam in $group2:
+    #if $bam:
+        #silent $g2.append(str($bam))
+    #end if
+#end for
+## with one group rmats runs no test at all, so the paired checks only apply to two groups
+#if str($stats.model) == 'paired' and $g2 and len($g1) != len($g2):
+    >&2 echo 'The paired statistical model needs the same number of BAM files in both groups, listed in matching order.' &&
+    exit 1 &&
+#end if
+mkdir -p out tmp &&
+## rmats reads the annotation as plain text and crashes on a gzipped one
+#if $gtf.is_of_type('gtf.gz'):
+    gunzip -c '$gtf' > annotation.gtf &&
+#end if
+printf '%s\n' '${",".join($g1)}' > b1.txt &&
+#if $g2:
+    printf '%s\n' '${",".join($g2)}' > b2.txt &&
+#end if
+rmats.py
+    --b1 b1.txt
+    #if $g2:
+        --b2 b2.txt
+    #end if
+    #if $gtf.is_of_type('gtf.gz'):
+        --gtf annotation.gtf
+    #else:
+        --gtf '$gtf'
+    #end if
+    -t '$t'
+    --readLength $readLength
+    $variable_read_length
+    --libType '$libType'
+    $allow_clipping
+    --nthread \${GALAXY_SLOTS:-1}
+    #if str($stats.model) == 'unpaired':
+        --cstat $stats.cstat
+    #elif str($stats.model) == 'paired':
+        #if $g2:
+            --paired-stats
+        #end if
+    #else:
+        --statoff
+    #end if
+    #if str($novel.novelSS) == 'yes':
+        --novelSS
+        --mil $novel.mil
+        --mel $novel.mel
+    #end if
+    --task both
+    --od out
+    --tmp tmp
+&&
+## rmats ignores the exit status of its statistics helpers, so a helper killed mid-write leaves
+## a short table and a green job; every counted event must reach the final table
+for counts in JC JCEC; do
+    for event in SE A5SS A3SS MXE RI; do
+        n_counted=\$(awk 'END { print NR - 1 }' "out/\$counts.raw.input.\$event.txt") || exit 1;
+        n_reported=\$(awk 'END { print NR - 1 }' "out/\$event.MATS.\$counts.txt") || exit 1;
+        if [ "\$n_counted" -ne "\$n_reported" ]; then
+            >&2 echo "rMATS counted \$n_counted \$event events (\$counts) but reported \$n_reported: a statistics step failed";
+            exit 1;
+        fi;
+    done;
+done
+    ]]></command>
+    <inputs>
+        <param name="group1" type="data" format="bam" multiple="true" label="BAM files for sample group 1 (--b1)"
+            help="Replicates of the first condition (the treatment in nf-core/rnasplice), reported as SAMPLE_1. For the paired model use a list collection, so that the replicate order is under your control."/>
+        <param name="group2" type="data" format="bam" multiple="true" optional="true" label="BAM files for sample group 2 (--b2)"
+            help="Replicates of the second condition (the control in nf-core/rnasplice), reported as SAMPLE_2. Leave empty to count events for group 1 alone; no differential test is run then, whichever model is chosen below."/>
+        <param name="gtf" type="data" format="gtf,gtf.gz" label="Gene annotation (GTF)"
+            help="Must use the same chromosome names as the BAM files"/>
+        <param argument="-t" type="select" label="Read type">
+            <option value="paired" selected="true">Paired-end</option>
+            <option value="single">Single-end</option>
+        </param>
+        <param argument="--readLength" type="integer" min="1" value="40" label="Read length"
+            help="Set this to the read length of your data. It is used to normalise the inclusion and skipping isoform lengths (IncFormLen, SkipFormLen). nf-core/rnasplice uses 40 unless told otherwise."/>
+        <param argument="--variable-read-length" type="boolean" truevalue="--variable-read-length" falsevalue="" checked="true" label="Allow reads whose length differs from the read length"
+            help="Without this, rMATS discards every read that is not exactly the read length above, e.g. after adapter or quality trimming"/>
+        <param argument="--libType" type="select" label="Library strandedness">
+            <option value="fr-unstranded" selected="true">Unstranded (fr-unstranded)</option>
+            <option value="fr-firststrand">Reverse stranded, read 1 antisense to the transcript (fr-firststrand, e.g. dUTP, Illumina TruSeq Stranded)</option>
+            <option value="fr-secondstrand">Forward stranded, read 1 sense to the transcript (fr-secondstrand, e.g. Ligation, Standard SOLiD)</option>
+        </param>
+        <param argument="--allow-clipping" type="boolean" truevalue="--allow-clipping" falsevalue="" checked="true" label="Use soft- or hard-clipped alignments"
+            help="rMATS skips clipped alignments by default. nf-core/rnasplice turns this on, which matters for STAR alignments with soft-clipping."/>
+        <conditional name="stats">
+            <param name="model" type="select" label="Statistical model">
+                <option value="unpaired" selected="true">Unpaired replicates (rMATS likelihood-ratio test)</option>
+                <option value="paired">Paired replicates (PAIRADISE, --paired-stats)</option>
+                <option value="off">No statistical test (--statoff)</option>
+            </param>
+            <when value="unpaired">
+                <param argument="--cstat" type="float" min="0.0" max="0.9999" value="0.0001" label="Splicing difference cutoff"
+                    help="Null hypothesis cutoff for the difference in inclusion level between the groups. The default 0.0001 tests for any difference above 0.01%."/>
+            </when>
+            <when value="paired">
+            </when>
+            <when value="off">
+            </when>
+        </conditional>
+        <conditional name="novel">
+            <param argument="--novelSS" type="select" label="Detect novel (unannotated) splice sites">
+                <option value="no" selected="true">No</option>
+                <option value="yes">Yes</option>
+            </param>
+            <when value="no"/>
+            <when value="yes">
+                <param argument="--mil" type="integer" min="1" value="50" label="Minimum intron length" help="Only used for novel splice site detection"/>
+                <param argument="--mel" type="integer" min="1" value="500" label="Maximum exon length" help="Only used for novel splice site detection"/>
+            </when>
+        </conditional>
+    </inputs>
+    <outputs>
+        <data name="summary" format="tabular" from_work_dir="out/summary.txt" label="${tool.name} on ${on_string}: summary"/>
+        <collection name="jc_tables" type="list" label="${tool.name} on ${on_string}: events, junction counts (JC)">
+            <expand macro="event_tables" counts="JC"/>
+        </collection>
+        <collection name="jcec_tables" type="list" label="${tool.name} on ${on_string}: events, junction and exon counts (JCEC)">
+            <expand macro="event_tables" counts="JCEC"/>
+        </collection>
+    </outputs>
+    <tests>
+        <!-- two groups of paired-end replicates, group 1 favours inclusion of the cassette exon -->
+        <test expect_num_outputs="13">
+            <param name="group1" value="rmats_g1_rep1.bam,rmats_g1_rep2.bam" ftype="bam"/>
+            <param name="group2" value="rmats_g2_rep1.bam,rmats_g2_rep2.bam" ftype="bam"/>
+            <param name="gtf" value="rmats_annotation.gtf" ftype="gtf"/>
+            <param name="readLength" value="50"/>
+            <output name="summary">
+                <assert_contents>
+                    <has_n_lines n="6"/>
+                    <has_line_matching expression="SE\tskipped exon\t1\t1\t1\t1\t0\t1\t1\t0"/>
+                    <has_line_matching expression="MXE\tmutually exclusive exons\t0\t0\t0\t0\t0\t0\t0\t0"/>
+                </assert_contents>
+            </output>
+            <output_collection name="jc_tables" type="list" count="5">
+                <element name="SE">
+                    <assert_contents>
+                        <has_n_lines n="2"/>
+                        <has_line_matching expression="ID\tGeneID\tgeneSymbol\tchr\tstrand\texonStart_0base\texonEnd\t.*\tPValue\tFDR\tIncLevel1\tIncLevel2\tIncLevelDifference"/>
+                        <has_line_matching expression="0\t&quot;geneA&quot;\t&quot;geneA&quot;\tchr1\t\+\t1000\t1100\t200\t400\t1800\t2000\t0\t25,25\t6,8\t6,8\t34,30\t98\t49\t[0-9.]+e-[0-9]+\t[0-9.]+e-[0-9]+\t0\.676,0\.61\t0\.081,0\.118\t0\.543"/>
+                    </assert_contents>
+                </element>
+                <element name="A5SS">
+                    <assert_contents>
+                        <has_n_lines n="1"/>
+                    </assert_contents>
+                </element>
+                <element name="A3SS">
+                    <assert_contents>
+                        <has_n_lines n="1"/>
+                    </assert_contents>
+                </element>
+                <element name="MXE">
+                    <assert_contents>
+                        <has_n_lines n="1"/>
+                    </assert_contents>
+                </element>
+                <element name="RI">
+                    <assert_contents>
+                        <has_n_lines n="1"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <output_collection name="jcec_tables" type="list" count="5">
+                <element name="SE">
+                    <assert_contents>
+                        <has_n_lines n="2"/>
+                        <has_line_matching expression="0\t&quot;geneA&quot;\t&quot;geneA&quot;\tchr1\t\+\t1000\t1100\t200\t400\t1800\t2000\t0\t[0-9]+,[0-9]+\t6,8\t[0-9]+,[0-9]+\t34,30\t149\t49\t.*"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- paired statistical model (PAIRADISE) -->
+        <test expect_num_outputs="13">
+            <param name="group1" value="rmats_g1_rep1.bam,rmats_g1_rep2.bam" ftype="bam"/>
+            <param name="group2" value="rmats_g2_rep1.bam,rmats_g2_rep2.bam" ftype="bam"/>
+            <param name="gtf" value="rmats_annotation.gtf" ftype="gtf"/>
+            <param name="readLength" value="50"/>
+            <conditional name="stats">
+                <param name="model" value="paired"/>
+            </conditional>
+            <assert_command>
+                <has_text text="--paired-stats"/>
+                <not_has_text text="--cstat"/>
+            </assert_command>
+            <output_collection name="jc_tables" type="list" count="5">
+                <element name="SE">
+                    <assert_contents>
+                        <has_n_lines n="2"/>
+                        <has_line_matching expression="0\t&quot;geneA&quot;\t.*\t25,25\t6,8\t6,8\t34,30\t98\t49\t[0-9.e-]+\t[0-9.e-]+\t0\.676,0\.61\t0\.081,0\.118\t0\.543"/>
+                        <!-- the unpaired model's p-value for this event; PAIRADISE must give something else -->
+                        <has_text text="5.66823569953e-30" negate="true"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- read 1 is sense to the gene (an fr-secondstrand library), so fr-firststrand throws every fragment away -->
+        <test expect_num_outputs="13">
+            <param name="group1" value="rmats_g1_rep1.bam,rmats_g1_rep2.bam" ftype="bam"/>
+            <param name="group2" value="rmats_g2_rep1.bam,rmats_g2_rep2.bam" ftype="bam"/>
+            <param name="gtf" value="rmats_annotation.gtf" ftype="gtf"/>
+            <param name="readLength" value="50"/>
+            <param name="libType" value="fr-firststrand"/>
+            <output name="summary">
+                <assert_contents>
+                    <has_line_matching expression="SE\tskipped exon\t0\t0\t0\t0\t0\t0\t0\t0"/>
+                </assert_contents>
+            </output>
+            <output_collection name="jc_tables" type="list" count="5">
+                <element name="SE">
+                    <assert_contents>
+                        <has_n_lines n="1"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- one group of single-end replicates: counts only, NA p-values even with the default model -->
+        <test expect_num_outputs="13">
+            <param name="group1" value="rmats_se_rep1.bam,rmats_se_rep2.bam" ftype="bam"/>
+            <param name="gtf" value="rmats_annotation.gtf" ftype="gtf"/>
+            <param name="t" value="single"/>
+            <param name="readLength" value="50"/>
+            <param name="allow_clipping" value="false"/>
+            <conditional name="novel">
+                <param name="novelSS" value="yes"/>
+                <param name="mil" value="60"/>
+                <param name="mel" value="400"/>
+            </conditional>
+            <assert_command>
+                <has_text text="--mil 60"/>
+                <has_text text="--mel 400"/>
+                <not_has_text text="--b2"/>
+                <not_has_text text="--allow-clipping"/>
+            </assert_command>
+            <output name="summary">
+                <assert_contents>
+                    <has_line_matching expression="SE\tskipped exon\t1\t1\t0\t0\t0\t0\t0\t0"/>
+                </assert_contents>
+            </output>
+            <output_collection name="jc_tables" type="list" count="5">
+                <element name="SE">
+                    <assert_contents>
+                        <has_line_matching expression="0\t&quot;geneA&quot;\t.*\t13,8\t12,14\t\t\t98\t49\tNA\tNA\t0\.351,0\.222\t\tNA"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- one group with the paired model chosen: still counts only, like any other model -->
+        <test expect_num_outputs="13">
+            <param name="group1" value="rmats_g1_rep1.bam,rmats_g1_rep2.bam" ftype="bam"/>
+            <param name="gtf" value="rmats_annotation.gtf" ftype="gtf"/>
+            <param name="readLength" value="50"/>
+            <conditional name="stats">
+                <param name="model" value="paired"/>
+            </conditional>
+            <assert_command>
+                <not_has_text text="--paired-stats"/>
+                <not_has_text text="--b2"/>
+            </assert_command>
+            <output_collection name="jc_tables" type="list" count="5">
+                <element name="SE">
+                    <assert_contents>
+                        <has_line_matching expression="0\t&quot;geneA&quot;\t.*\t25,25\t6,8\t\t\t98\t49\tNA\tNA\t0\.676,0\.61\t\tNA"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- two groups with the test switched off: counts and inclusion levels but NA p-values -->
+        <test expect_num_outputs="13">
+            <param name="group1" value="rmats_g1_rep1.bam,rmats_g1_rep2.bam" ftype="bam"/>
+            <param name="group2" value="rmats_g2_rep1.bam,rmats_g2_rep2.bam" ftype="bam"/>
+            <param name="gtf" value="rmats_annotation.gtf" ftype="gtf"/>
+            <param name="readLength" value="50"/>
+            <conditional name="stats">
+                <param name="model" value="off"/>
+            </conditional>
+            <output name="summary">
+                <assert_contents>
+                    <has_line_matching expression="SE\tskipped exon\t1\t1\t0\t0\t0\t0\t0\t0"/>
+                </assert_contents>
+            </output>
+            <output_collection name="jc_tables" type="list" count="5">
+                <element name="SE">
+                    <assert_contents>
+                        <has_line_matching expression="0\t&quot;geneA&quot;\t.*\t25,25\t6,8\t6,8\t34,30\t98\t49\tNA\tNA\t0\.676,0\.61\t0\.081,0\.118\t0\.543"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- gzipped annotation: decompressed in the job, same events as the first test -->
+        <test expect_num_outputs="13">
+            <param name="group1" value="rmats_g1_rep1.bam,rmats_g1_rep2.bam" ftype="bam"/>
+            <param name="group2" value="rmats_g2_rep1.bam,rmats_g2_rep2.bam" ftype="bam"/>
+            <param name="gtf" value="rmats_annotation.gtf.gz" ftype="gtf.gz"/>
+            <param name="readLength" value="50"/>
+            <assert_command>
+                <has_text text="gunzip -c"/>
+                <has_text text="--gtf annotation.gtf"/>
+            </assert_command>
+            <output name="summary">
+                <assert_contents>
+                    <has_line_matching expression="SE\tskipped exon\t1\t1\t1\t1\t0\t1\t1\t0"/>
+                </assert_contents>
+            </output>
+            <output_collection name="jc_tables" type="list" count="5">
+                <element name="SE">
+                    <assert_contents>
+                        <has_n_lines n="2"/>
+                        <has_line_matching expression="0\t&quot;geneA&quot;\t.*\t25,25\t6,8\t6,8\t34,30\t98\t49\t[0-9.]+e-[0-9]+\t[0-9.]+e-[0-9]+\t0\.676,0\.61\t0\.081,0\.118\t0\.543"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- the paired model refuses groups of different sizes -->
+        <test expect_failure="true">
+            <param name="group1" value="rmats_g1_rep1.bam,rmats_g1_rep2.bam" ftype="bam"/>
+            <param name="group2" value="rmats_g2_rep1.bam" ftype="bam"/>
+            <param name="gtf" value="rmats_annotation.gtf" ftype="gtf"/>
+            <param name="readLength" value="50"/>
+            <conditional name="stats">
+                <param name="model" value="paired"/>
+            </conditional>
+            <assert_stderr>
+                <has_text text="needs the same number of BAM files in both groups"/>
+            </assert_stderr>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+rMATS (here rMATS-turbo) detects alternative splicing events from RNA-seq alignments and tests
+whether their inclusion levels differ between two groups of samples. It reports five event types:
+
+- **SE**: skipped (cassette) exon
+- **A5SS** / **A3SS**: alternative 5' or 3' splice site
+- **MXE**: mutually exclusive exons
+- **RI**: retained intron
+
+This wrapper runs the BAM-input mode in a single step (`--task both`), the way nf-core/rnasplice does.
+
+## Use restrictions
+
+rMATS-turbo is not under an OSI-approved license. Its license makes the software available to
+academic and non-profit institutions for research purposes, under the terms of the 2-Clause BSD
+License. For use by, or transfer to, commercial entities it asks you to contact the authors first.
+Read the [rMATS-turbo LICENSE](https://github.com/Xinglab/rmats-turbo/blob/v4.4.0/LICENSE) before
+using this tool.
+
+## Inputs
+
+- Two groups of coordinate-sorted BAM files, one per replicate, e.g. STAR alignments. Group 1 is
+  reported as `SAMPLE_1` and group 2 as `SAMPLE_2`. Within a group the per-replicate values are
+  comma-separated in input order: the element order of a collection, or Galaxy's own order (not the
+  click order) when several history datasets are selected. Use list collections when the order
+  matters, as it does for the paired model.
+- A GTF annotation, plain or gzipped, that matches the reference the reads were aligned to.
+
+Leave group 2 empty to count events in one group only. The tables then have empty group 2 columns
+and `NA` p-values, whichever statistical model is selected.
+
+## Choosing parameters
+
+- **Read length**: the read length of the data. With *Allow reads whose length differs from the
+  read length* switched on (the default here and in nf-core/rnasplice) trimmed reads are kept, and
+  the value only sets the effective isoform lengths used to normalise inclusion levels.
+- **Library strandedness**: getting this wrong for a stranded library discards most reads.
+- **Statistical model**: the default is rMATS' own test for unpaired replicates. The paired model
+  (PAIRADISE) is for designs where replicate *i* of group 1 and replicate *i* of group 2 come from
+  the same individual. It needs the same number of BAM files in each group, in matching order, so
+  supply both groups as list collections whose elements line up. nf-core/rnasplice turns the
+  paired model on by default.
+
+## Outputs
+
+- **Summary**: per event type, the number of events found and the number significant at
+  FDR <= 0.05, for junction counts and for junction plus exon counts.
+- **Events, junction counts (JC)**: a list with one table per event type, counting only reads that
+  span a splice junction.
+- **Events, junction and exon counts (JCEC)**: the same events counted with reads on the
+  alternative exon body as well.
+
+Main columns of each event table:
+
+| Column | Meaning |
+| --- | --- |
+| `IJC_SAMPLE_1`, `SJC_SAMPLE_1`, `IJC_SAMPLE_2`, `SJC_SAMPLE_2` | Inclusion and skipping read counts per replicate |
+| `IncFormLen`, `SkipFormLen` | Effective lengths of the inclusion and skipping forms |
+| `PValue`, `FDR` | Significance of the difference between the groups |
+| `IncLevel1`, `IncLevel2` | Inclusion level (PSI) per replicate |
+| `IncLevelDifference` | Mean inclusion level of group 1 minus that of group 2 |
+
+Coordinates are 0-based for starts and 1-based for ends, as in the column names.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1038/s41596-023-00944-2</citation>
+        <citation type="doi">10.1073/pnas.1419161111</citation>
+        <citation type="doi">10.1016/j.ajhg.2020.07.005</citation>
+    </citations>
+</tool>

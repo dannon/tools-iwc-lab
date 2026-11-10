@@ -1,0 +1,8 @@
+chr1	test	gene	201	2000	.	+	.	gene_id "geneA"; gene_name "geneA";
+chr1	test	transcript	201	2000	.	+	.	gene_id "geneA"; gene_name "geneA"; transcript_id "tx_incl";
+chr1	test	exon	201	400	.	+	.	gene_id "geneA"; gene_name "geneA"; transcript_id "tx_incl"; exon_number "1";
+chr1	test	exon	1001	1100	.	+	.	gene_id "geneA"; gene_name "geneA"; transcript_id "tx_incl"; exon_number "2";
+chr1	test	exon	1801	2000	.	+	.	gene_id "geneA"; gene_name "geneA"; transcript_id "tx_incl"; exon_number "3";
+chr1	test	transcript	201	2000	.	+	.	gene_id "geneA"; gene_name "geneA"; transcript_id "tx_skip";
+chr1	test	exon	201	400	.	+	.	gene_id "geneA"; gene_name "geneA"; transcript_id "tx_skip"; exon_number "1";
+chr1	test	exon	1801	2000	.	+	.	gene_id "geneA"; gene_name "geneA"; transcript_id "tx_skip"; exon_number "2";

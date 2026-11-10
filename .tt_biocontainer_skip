@@ -1,3 +1,5 @@
 # Add repositories that intentionally cannot satisfy BioContainer linting here.
 # This expression tool has no package requirements from which to infer a container.
 tools/compose_text_param
+# No mulled BioContainer is registered yet for this two-package requirement set.
+tools/rmats
