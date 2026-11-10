@@ -1,0 +1,259 @@
+<tool id="mirtop_gff" name="mirtop gff" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>annotate miRNA and isomiR reads as mirGFF3</description>
+    <macros>
+        <import>macros.xml</import>
+    </macros>
+    <expand macro="bio_tools"/>
+    <expand macro="requirements">
+        <requirement type="package" version="1.25">samtools</requirement>
+    </expand>
+    <version_command>mirtop --version</version_command>
+    <command detect_errors="aggressive"><![CDATA[
+#import re
+mkdir inputs &&
+#set $seen = []
+#set $input_files = []
+#for $i, $dataset in enumerate($input_format.input)
+    ## mirtop names each sample after its input file, so stage files under their (unique) dataset names.
+    ## Each file gets its own directory because mirtop writes <name>.bam and <name>_sort.bam next to it
+    ## and reuses them if they already exist.
+    #set $sample = re.sub(r'(?i)\.(bam|sam|mirna|txt|tsv|tabular)$', '', str($dataset.element_identifier))
+    #set $sample = re.sub(r'[^\w\-.]', '_', $sample).strip('.') or 'sample'
+    #set $base = $sample
+    #set $n = 1
+    #while $sample in $seen
+        #set $n += 1
+        #set $sample = '%s_%d' % ($base, $n)
+    #end while
+    #silent $seen.append($sample)
+    #if $input_format.format == 'BAM'
+        #if $dataset.is_of_type('sam')
+            #set $staged = 'inputs/%d/%s.sam' % ($i, $sample)
+        #else
+            #set $staged = 'inputs/%d/%s.bam' % ($i, $sample)
+        #end if
+    #else
+        #set $staged = 'inputs/%d/%s.txt' % ($i, $sample)
+    #end if
+    #silent $input_files.append($staged)
+    mkdir 'inputs/$i' &&
+    ln -s '$dataset' '$staged' &&
+#end for
+@STAGE_ANNOTATION@
+#if str($keep_name) and len($input_files) > 1
+    ## with read names kept, mirtop writes one line per sample for the same sequence
+    echo 'Keeping the read name only works with a single input file.' >&2 && exit 1 &&
+#end if
+mirtop gff
+    --format '$input_format.format'
+    --hairpin hairpin.fa
+    --gtf annotation.gff3
+    --sps '$sps'
+    #if str($database) not in ('', 'None')
+        --database '$database'
+    #end if
+    $keep_name
+    $add_extra
+    -o output
+    #for $staged in $input_files
+        '$staged'
+    #end for
+&& mv output/mirtop.gff '$output'
+    ]]></command>
+    <inputs>
+        <conditional name="input_format">
+            <param argument="--format" type="select" label="Input format">
+                <option value="BAM" selected="true">BAM/SAM alignments against the hairpin sequences</option>
+                <option value="seqbuster">seqbuster (miraligner) output</option>
+                <option value="prost">PROST! output</option>
+            </param>
+            <when value="BAM">
+                <param name="input" type="data" format="sam,unsorted.bam" multiple="true" label="Aligned reads" help="Reads aligned to the hairpin FASTA, e.g. with bowtie. Read names ending in _xN (as written by seqcluster collapse) are counted N times."/>
+            </when>
+            <when value="seqbuster">
+                <param name="input" type="data" format="tabular" multiple="true" label="seqbuster/miraligner output (.mirna)"/>
+            </when>
+            <when value="prost">
+                <param name="input" type="data" format="tabular" multiple="true" label="PROST! output"/>
+            </when>
+        </conditional>
+        <expand macro="annotation_params"/>
+        <param argument="--database" type="select" optional="true" label="Annotation database" help="Which database the annotation GFF3 comes from. This picks how mirtop parses the annotation, so it must match the file. Leave empty to detect it from the GFF3 header.">
+            <option value="miRBase">miRBase</option>
+            <option value="MirGeneDB">MirGeneDB</option>
+        </param>
+        <param argument="--keep-name" type="boolean" truevalue="--keep-name" falsevalue="" checked="false" label="Use the read name in the attribute column" help="By default reads are identified by their sequence-derived UID. Only possible with a single input file."/>
+        <param argument="--add-extra" type="boolean" truevalue="--add-extra" falsevalue="" checked="false" label="Add extra attributes" help="Adds the nucleotide changes behind each isomiR variant to the attributes."/>
+    </inputs>
+    <outputs>
+        <data name="output" format="gff" label="${tool.name} on ${on_string}: mirGFF3"/>
+    </outputs>
+    <tests>
+        <!-- single BAM input -->
+        <test expect_num_outputs="1">
+            <conditional name="input_format">
+                <param name="format" value="BAM"/>
+                <param name="input" value="sim_isomir.bam" ftype="unsorted.bam"/>
+            </conditional>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <param name="sps" value="hsa"/>
+            <assert_command>
+                <has_text text="--sps 'hsa'"/>
+            </assert_command>
+            <output name="output" ftype="gff">
+                <assert_contents>
+                    <has_line_matching expression="^## mirGFF3\. VERSION .*"/>
+                    <has_line line="## COLDATA: sim_isomir"/>
+                    <has_text text="Name hsa-let-7a-5p"/>
+                    <has_line_matching expression="^hsa-let-7a-\d\t\S+\t(ref_miRNA|isomiR)\t.*"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- gzipped hairpin and annotation are decompressed first and give the same result -->
+        <test expect_num_outputs="1">
+            <conditional name="input_format">
+                <param name="format" value="BAM"/>
+                <param name="input" value="sim_isomir.bam" ftype="unsorted.bam"/>
+            </conditional>
+            <param name="hairpin" value="hairpin.fa.gz" ftype="fasta.gz"/>
+            <param name="gtf" value="hsa.gff3.gz" ftype="gff3.gz"/>
+            <param name="sps" value="hsa"/>
+            <assert_command>
+                <has_text text="gunzip -c"/>
+            </assert_command>
+            <output name="output" ftype="gff">
+                <assert_contents>
+                    <has_line_matching expression="^## mirGFF3\. VERSION .*"/>
+                    <has_line line="## COLDATA: sim_isomir"/>
+                    <has_text text="Name hsa-let-7a-5p"/>
+                    <has_line_matching expression="^hsa-let-7a-\d\t\S+\t(ref_miRNA|isomiR)\t.*"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- two SAM samples with the same name are merged into one file with two expression columns -->
+        <test expect_num_outputs="1">
+            <conditional name="input_format">
+                <param name="format" value="BAM"/>
+                <param name="input" value="sim_isomir.sam,sim_isomir.sam" ftype="sam"/>
+            </conditional>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <param name="database" value="miRBase"/>
+            <param name="add_extra" value="true"/>
+            <output name="output" ftype="gff">
+                <assert_contents>
+                    <has_line line="## COLDATA: sim_isomir,sim_isomir_2"/>
+                    <has_line_matching expression="^## source-ontology: miRBase doi:.*"/>
+                    <has_line_matching expression=".*Expression \d+,\d+;.*"/>
+                    <has_text text=" Changes "/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- read names ending in _xN carry the count; mirtop reports 0 for any other name -->
+        <test expect_num_outputs="1">
+            <conditional name="input_format">
+                <param name="format" value="BAM"/>
+                <param name="input" value="sim_isomir_x7.sam" ftype="sam"/>
+            </conditional>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <param name="sps" value="hsa"/>
+            <output name="output" ftype="gff">
+                <assert_contents>
+                    <has_line line="## COLDATA: sim_isomir_x7"/>
+                    <has_text text="Variant iso_5p:-2,iso_add3p:1; Cigar 23MA; Expression 7;"/>
+                    <has_text text="Expression 0;" negate="true"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- keeping read names with more than one input splits every sequence by sample, so it is refused -->
+        <test expect_failure="true">
+            <conditional name="input_format">
+                <param name="format" value="BAM"/>
+                <param name="input" value="sim_isomir.bam,sim_isomir.sam"/>
+            </conditional>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <param name="sps" value="hsa"/>
+            <param name="keep_name" value="true"/>
+            <assert_stderr>
+                <has_text text="only works with a single input file"/>
+            </assert_stderr>
+        </test>
+        <!-- seqbuster input -->
+        <test expect_num_outputs="1">
+            <conditional name="input_format">
+                <param name="format" value="seqbuster"/>
+                <param name="input" value="seqbuster.mirna" ftype="tabular"/>
+            </conditional>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <param name="keep_name" value="true"/>
+            <output name="output" ftype="gff">
+                <assert_contents>
+                    <has_line line="## TOOLS: seqbuster"/>
+                    <has_line line="## COLDATA: seqbuster"/>
+                    <has_text text="Read hsa-let-7a-1_hsa-let-7a-5p"/>
+                    <has_n_lines n="24"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- PROST! input -->
+        <test expect_num_outputs="1">
+            <conditional name="input_format">
+                <param name="format" value="prost"/>
+                <param name="input" value="prost.txt" ftype="tabular"/>
+            </conditional>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <output name="output" ftype="gff">
+                <assert_contents>
+                    <has_line line="## TOOLS: prost"/>
+                    <has_line line="## COLDATA: prost"/>
+                    <has_text text="Name hsa-let-7a-5p"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+[mirtop](https://github.com/miRTop/mirtop) annotates small RNA-seq reads against
+miRNA precursors and writes the result in
+[mirGFF3](https://github.com/miRTop/mirGFF3), the community format for miRNA
+and isomiR quantification. Each line describes one unique read sequence: the
+mature miRNA it belongs to, how it differs from the reference miRNA (5' and 3'
+trimming, non-templated 3' additions, nucleotide substitutions) and its count
+in every sample.
+
+All inputs are merged into one mirGFF3 file with one expression column per
+sample. Sample names come from the input dataset names, with a trailing file
+extension removed and characters other than letters, digits, `_`, `-` and `.`
+replaced by `_`. Repeated names get `_2`, `_3` and so on.
+
+## Inputs
+
+- **Aligned reads**: BAM or SAM files of reads aligned to the hairpin FASTA
+  (for example with bowtie, as nf-core/smrnaseq does). If read names end in
+  `_xN`, as written by `seqcluster collapse`, each read counts N times; reads
+  named any other way get an expression of 0. Alternatively, seqbuster/miraligner
+  `.mirna` files or PROST! output can be converted. For seqbuster files the count
+  is also read from `_xN` in the read name, not from the `freq` column. A PROST!
+  file must hold a single sample; mirtop returns nothing for a multi-sample one.
+- **Hairpin sequences**: the precursor FASTA the reads were aligned to, e.g.
+  miRBase `hairpin.fa`. Only entries whose header line contains the species
+  code are used.
+- **Mature miRNA annotation**: the miRBase GFF3 for the species (e.g.
+  `hsa.gff3`) giving the mature miRNA positions on each precursor.
+- **Species code**: the miRBase prefix such as `hsa` or `mmu`.
+
+## Output
+
+A mirGFF3 file. Its attribute column uses `key value;` pairs rather than
+GFF3's `key=value`, so it is stored with Galaxy's generic `gff` datatype
+instead of `gff3`. Use **mirtop counts** to turn it into a count table and
+**mirtop stats** for per-sample summaries.
+    ]]></help>
+    <expand macro="citations"/>
+</tool>

@@ -1,0 +1,162 @@
+<tool id="mirtop_stats" name="mirtop stats" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>summarise isomiR types per sample from mirGFF3</description>
+    <macros>
+        <import>macros.xml</import>
+    </macros>
+    <expand macro="bio_tools"/>
+    <expand macro="requirements"/>
+    <version_command>mirtop --version</version_command>
+    <command detect_errors="aggressive"><![CDATA[
+mkdir inputs output &&
+#for $i, $gff in enumerate($input)
+    ln -s '$gff' 'inputs/${i}.gff' &&
+#end for
+python '$check_samples' inputs/*.gff &&
+mirtop stats
+    -o output
+    #for $i, $gff in enumerate($input)
+        'inputs/${i}.gff'
+    #end for
+&& python '$fix_stats' output/mirtop_stats.txt output/mirtop_stats.log
+&& mv output/mirtop_stats.txt '$stats'
+&& mv output/mirtop_stats.log '$stats_json'
+    ]]></command>
+    <configfiles>
+        <!-- mirtop keeps only one set of numbers per sample name, so the same name in two files loses data -->
+        <configfile name="check_samples"><![CDATA[
+import sys
+
+seen = {}
+for path in sys.argv[1:]:
+    with open(path) as handle:
+        for line in handle:
+            if not line.startswith("\#"):
+                break
+            if line.startswith("\#\# COLDATA:"):
+                for sample in line.split(":", 1)[1].strip().split(","):
+                    if sample in seen:
+                        sys.exit(
+                            "Sample '%s' is in more than one input file. mirtop stats would keep only "
+                            "one set of numbers for it; rename the samples or summarise the files separately." % sample
+                        )
+                    seen[sample] = path
+        ]]></configfile>
+        <!-- mirtop 0.4.30 pads its summaries with zero rows, and in the JSON a padded row replaces
+             the real isomiR_sum of the first sample of every file. Real values are always above zero,
+             so drop a zero row when the same category and sample has a real one, then rebuild the JSON. -->
+        <configfile name="fix_stats"><![CDATA[
+import csv
+import json
+import sys
+
+txt, log = sys.argv[1], sys.argv[2]
+with open(txt) as handle:
+    comment = handle.readline()
+    rows = list(csv.reader(handle))
+header, rows = rows[0], rows[1:]
+real = set((row[1], row[2]) for row in rows if float(row[3]) > 0)
+kept = []
+seen = set()
+for row in rows:
+    key = tuple(row[1:])
+    if key in seen or (float(row[3]) == 0 and (row[1], row[2]) in real):
+        continue
+    seen.add(key)
+    kept.append(row)
+with open(txt, "w", newline="") as handle:
+    handle.write(comment)
+    csv.writer(handle, lineterminator="\n").writerows([header] + kept)
+with open(log) as handle:
+    data = json.load(handle)
+metrics = {}
+for _, category, sample, counts in kept:
+    metrics.setdefault(sample, {})[category] = float(counts)
+data["metrics"] = metrics
+with open(log, "w") as handle:
+    json.dump(data, handle)
+        ]]></configfile>
+    </configfiles>
+    <inputs>
+        <param name="input" type="data" format="gff" multiple="true" label="mirGFF3 files" help="Output of mirtop gff. Sample names are read from each file's COLDATA header."/>
+    </inputs>
+    <outputs>
+        <data name="stats" format="csv" label="${tool.name} on ${on_string}: stats"/>
+        <data name="stats_json" format="json" label="${tool.name} on ${on_string}: stats (JSON)"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="2">
+            <param name="input" value="sampleA_mirtop.gff"/>
+            <output name="stats" ftype="csv">
+                <assert_contents>
+                    <has_line line="# mirtop stats version @TOOL_VERSION@"/>
+                    <has_line line=",category,sample,counts"/>
+                    <has_line line="7,isomiR_sum,sampleA,3448.0"/>
+                    <has_line line="7,isomiR_count,sampleA,19.0"/>
+                    <has_line line="0,iso_3p_count,sampleA,9.0"/>
+                </assert_contents>
+            </output>
+            <output name="stats_json" ftype="json">
+                <assert_contents>
+                    <has_json_property_with_value property="tool" value="&quot;mirtop&quot;"/>
+                    <has_text text="&quot;sampleA&quot;"/>
+                    <!-- mirtop itself writes 0 here -->
+                    <has_text text="&quot;isomiR_sum&quot;: 3448.0"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- several files, one holding two samples -->
+        <test expect_num_outputs="2">
+            <param name="input" value="sampleA_mirtop.gff,two_samples_mirtop.gff"/>
+            <output name="stats" ftype="csv">
+                <assert_contents>
+                    <has_line line="7,isomiR_sum,sampleA,3448.0"/>
+                    <has_line_matching expression="^\d+,isomiR_sum,sA,[1-9]\d*\.0$"/>
+                    <has_line_matching expression="^\d+,isomiR_sum,sB,[1-9]\d*\.0$"/>
+                </assert_contents>
+            </output>
+            <output name="stats_json" ftype="json">
+                <assert_contents>
+                    <has_text text="&quot;sA&quot;"/>
+                    <has_text text="&quot;sB&quot;"/>
+                    <has_text text="&quot;isomiR_sum&quot;: 3448.0"/>
+                    <has_text text="&quot;isomiR_sum&quot;: 0" negate="true"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- the same sample name in two files would lose one file's numbers -->
+        <test expect_failure="true">
+            <param name="input" value="sampleA_mirtop.gff,sampleA_mirtop.gff"/>
+            <assert_stderr>
+                <has_text text="is in more than one input file"/>
+            </assert_stderr>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+Summarises one or more mirGFF3 files, as written by **mirtop gff**. For each
+sample it reports the number of unique sequences, the total read count and
+the mean count for reference miRNAs and for each isomiR type (5' and 3'
+trimming, non-templated additions, substitutions).
+
+## Outputs
+
+- **stats**: a CSV table with an unnamed row-number column followed by
+  `category`, `sample` and `counts` (the first line is a comment with the
+  mirtop version)
+- **stats (JSON)**: the same numbers as JSON, in the layout MultiQC's mirtop
+  module reads
+
+mirtop 0.4.30 pads both files with zero rows, and in its JSON one of them
+replaces the real isomiR read total of the first sample in every file. This
+tool removes the padding, so the totals here are correct and can differ from
+what mirtop itself writes.
+
+## Limitations
+
+- A sample name may appear in only one input file; the tool stops otherwise.
+- A sample with no counted reads is left out of both outputs, and mirtop fails
+  if no input has any counted reads.
+    ]]></help>
+    <expand macro="citations"/>
+</tool>

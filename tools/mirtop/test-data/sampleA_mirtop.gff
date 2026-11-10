@@ -1,0 +1,24 @@
+## mirGFF3. VERSION 1.2
+## source-ontology: miRBasev21 doi:10.25504/fairsharing.hmgte8
+## TOOLS: seqbuster
+## COLDATA: sampleA
+hsa-let-7a-1	miRBasev21	isomiR	4	25	0	+	.	Read ATGAGGTAGCAGGTTGTATAGT; UID iso-22-I0SJ1NSLN; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:-1,iso_5p:-1,iso_snv_central; Cigar 9MC12M; Expression 66; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	25	0	+	.	Read ATGAGGTAGTCGGTTGTATAGT; UID iso-22-I0S3MNSLN; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:-1,iso_5p:-1,iso_snv_central; Cigar 10MC11M; Expression 8; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	27	0	+	.	Read TTGAGGTAGTAGGTTGTATAGTTT; UID iso-24-Z0S31NSL2Q; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:+1,iso_5p:-1,iso_snv; Cigar T23M; Expression 290; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	27	0	+	.	Read ATTAGGTAGTAGGTTGTATAGTTA; UID iso-24-IPS31NSL2O; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_5p:-1,iso_add3p:1,iso_snv_seed; Cigar 2MT20MA; Expression 11; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	27	0	+	.	Read ATGAGGTAGTAGGTTGTATAGTTA; UID iso-24-I0S31NSL2O; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_5p:-1,iso_add3p:1; Cigar 23MA; Expression 5; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	25	0	+	.	Read ATGAGGTAGTAGGTTGTATAGT; UID iso-22-I0S31NSLN; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:-1,iso_5p:-1; Cigar 22M; Expression 861; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	26	0	+	.	Read ATGAGGTAGTGGGTTGTATAGTT; UID iso-23-I0S3RNSL0E; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_5p:-1,iso_snv_central; Cigar 10MG12M; Expression 8; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	26	0	+	.	Read ATGAGGTAGTAGGTTGTCTAGTT; UID iso-23-I0S31NSX0E; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_5p:-1,iso_snv_central_supp; Cigar 17MC5M; Expression 198; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	29	0	+	.	Read ATGAGGTAGTAGGTTGTAAAGTTATT; UID iso-26-I0S31NSB7QE; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_5p:-1,iso_add3p:3,iso_snv; Cigar 18MA4MI2M; Expression 158; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	4	26	0	+	.	Read ATGAGGTAGTAGGTTGTATAGTT; UID iso-23-I0S31NSL0E; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_5p:-1; Cigar 23M; Expression 103; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	25	0	+	.	Read TGAGGAAGTAGGTTGTATAGT; UID iso-21-XKDLRYVPE; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:-1,iso_snv_seed; Cigar 5MA15M; Expression 24; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	27	0	+	.	Read TGAGGGAGTAGGTTGTATAGTTA; UID iso-23-XK5LRYVP0O; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_add3p:1,iso_snv_seed; Cigar 5MG16MA; Expression 58; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	25	0	+	.	Read TGAGGTACTAGGTTGTATAGT; UID iso-21-XKUXRYVPE; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:-1,iso_snv_seed; Cigar 7MC13M; Expression 13; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	27	0	+	.	Read TGAGGTAGTAGGTTGTATAGTAT; UID iso-23-XKVLRYVP0I; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:-1,iso_add3p:2; Cigar 21MAM; Expression 713; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	26	0	+	.	Read TGAGGTAGTAGGTTGTATAGTA; UID iso-22-XKVLRYVPO; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_add3p:1; Cigar 21MA; Expression 550; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	28	0	+	.	Read TGAGGTAGTAGGTTGTATAGTTAT; UID iso-24-XKVLRYVPKI; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_add3p:2; Cigar 22MAM; Expression 152; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	27	0	+	.	Read TGAGGTAGTAGGTTGTATAGTTA; UID iso-23-XKVLRYVP0O; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_add3p:1; Cigar 22MA; Expression 11; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	28	0	+	.	Read TGAGGTAGTAGGTTGTATAGTTTT; UID iso-24-XKVLRYVPKQ; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:+2; Cigar 24M; Expression 116; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	27	0	+	.	Read TGAGGTAGTAGGTTGTATAGTTT; UID iso-23-XKVLRYVP0Q; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:+1; Cigar 23M; Expression 103; Filter Pass; Hits 1
+hsa-let-7a-1	miRBasev21	isomiR	5	25	0	+	.	Read TGAGGTAGTAGGTTGTATAGT; UID iso-21-XKVLRYVPE; Name hsa-let-7a-5p; Parent hsa-let-7a-1; Variant iso_3p:-1; Cigar 21M; Expression 0; Filter Pass; Hits 1

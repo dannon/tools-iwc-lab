@@ -1,0 +1,22 @@
+categories:
+  - RNA
+  - Sequence Analysis
+description: Annotate miRNAs and isomiRs from small RNA-seq data in the mirGFF3 format
+long_description: |
+  mirtop annotates small RNA-seq reads (BAM/SAM alignments to miRNA precursors,
+  or seqbuster and PROST! output) against miRBase or MirGeneDB and writes the
+  community mirGFF3 format, which records each isomiR and its counts per
+  sample. The suite also converts mirGFF3 into count tables and per-sample
+  isomiR statistics.
+homepage_url: https://github.com/miRTop/mirtop
+name: mirtop
+owner: iwc-lab
+remote_repository_url: https://github.com/galaxyproject/tools-iwc-lab/tree/main/tools/mirtop
+type: unrestricted
+auto_tool_repositories:
+  name_template: "{{ tool_id }}"
+  description_template: "Wrapper for mirtop: {{ tool_name }}."
+suite:
+  name: "suite_mirtop"
+  description: "mirtop tools to annotate miRNAs and isomiRs in the mirGFF3 format and summarise them."
+  type: repository_suite_definition

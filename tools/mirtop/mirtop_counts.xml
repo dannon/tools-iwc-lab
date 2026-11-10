@@ -1,0 +1,118 @@
+<tool id="mirtop_counts" name="mirtop counts" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>count table of miRNAs and isomiRs from mirGFF3</description>
+    <macros>
+        <import>macros.xml</import>
+    </macros>
+    <expand macro="bio_tools"/>
+    <expand macro="requirements"/>
+    <version_command>mirtop --version</version_command>
+    <command detect_errors="aggressive"><![CDATA[
+ln -s '$gff' input.gff &&
+mkdir output &&
+@STAGE_ANNOTATION@
+mirtop counts
+    --gff input.gff
+    --hairpin hairpin.fa
+    --gtf annotation.gff3
+    --sps '$sps'
+    $add_extra
+    -o output
+## mirtop writes all sample columns as one tab-joined field, which pandas then quotes as CSV;
+## parse that quoting properly so quotes inside sample names survive
+&& python -c 'import csv, sys; [sys.stdout.write("\t".join(row) + "\n") for row in csv.reader(open(sys.argv[1]), delimiter="\t")]' output/input.tsv > '$output'
+    ]]></command>
+    <inputs>
+        <param argument="--gff" type="data" format="gff" label="mirGFF3 file" help="Output of mirtop gff."/>
+        <expand macro="annotation_params"/>
+        <param argument="--add-extra" type="boolean" truevalue="--add-extra" falsevalue="" checked="true" label="Add nucleotide-level variant columns" help="Adds iso_5p_nt, iso_3p_nt, iso_add3p_nt and iso_snp_nt columns. nf-core/smrnaseq turns this on."/>
+    </inputs>
+    <outputs>
+        <data name="output" format="tabular" label="${tool.name} on ${on_string}: counts"/>
+    </outputs>
+    <tests>
+        <test expect_num_outputs="1">
+            <param name="gff" value="sampleA_mirtop.gff"/>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <param name="sps" value="hsa"/>
+            <output name="output" ftype="tabular">
+                <assert_contents>
+                    <has_line line="UID&#009;Read&#009;miRNA&#009;Variant&#009;iso_5p&#009;iso_3p&#009;iso_add3p&#009;iso_snp&#009;iso_5p_nt&#009;iso_3p_nt&#009;iso_add3p_nt&#009;iso_snp_nt&#009;sampleA"/>
+                    <has_n_columns n="13"/>
+                    <has_n_lines n="21"/>
+                    <has_text text="hsa-let-7a-5p"/>
+                </assert_contents>
+            </output>
+        </test>
+        <test expect_num_outputs="1">
+            <param name="gff" value="sampleA_mirtop.gff"/>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <param name="add_extra" value="false"/>
+            <output name="output" ftype="tabular">
+                <assert_contents>
+                    <has_line line="UID&#009;Read&#009;miRNA&#009;Variant&#009;iso_5p&#009;iso_3p&#009;iso_add3p&#009;iso_snp&#009;sampleA"/>
+                    <has_n_columns n="9"/>
+                    <has_n_lines n="21"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- two samples: each gets its own, unquoted count column -->
+        <test expect_num_outputs="1">
+            <param name="gff" value="two_samples_mirtop.gff"/>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <output name="output" ftype="tabular">
+                <assert_contents>
+                    <has_line_matching expression="^UID\t.*\tiso_snp_nt\tsA\tsB$"/>
+                    <has_line_matching expression="^iso-22-I0SJ1NSLN\t.*\t66\t66$"/>
+                    <has_n_columns n="14"/>
+                    <has_text text="&quot;" negate="true"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- a quote inside a sample name is kept, not stripped -->
+        <test expect_num_outputs="1">
+            <param name="gff" value="quoted_sample_mirtop.gff"/>
+            <param name="hairpin" value="hairpin.fa"/>
+            <param name="gtf" value="hsa.gff3"/>
+            <output name="output" ftype="tabular">
+                <assert_contents>
+                    <has_line_matching expression="^UID\t.*\tiso_snp_nt\ts&quot;A\tsA$"/>
+                    <has_line_matching expression="^iso-22-I0SJ1NSLN\t.*\t66\t66$"/>
+                    <has_n_columns n="14"/>
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+Converts a mirGFF3 file, as written by **mirtop gff**, into a tab-separated
+count table with one row per unique read sequence and one column per sample.
+
+Give it the same hairpin FASTA, miRNA annotation and species code that were
+used to make the mirGFF3 file. mirtop always reads the annotation, because it
+works out the database (miRBase or MirGeneDB) from the annotation's header
+lines, and stops with an error if it cannot. The hairpins are only used for
+the nucleotide-level columns.
+
+## Output columns
+
+- `UID`: the sequence-derived read identifier
+- `Read`: the read sequence
+- `miRNA`: the mature miRNA the read was assigned to
+- `Variant`: isomiR variant types, or `NA` for the reference miRNA
+- `iso_5p`, `iso_3p`, `iso_add3p`, `iso_snp`: size of each variant
+- `iso_5p_nt`, `iso_3p_nt`, `iso_add3p_nt`, `iso_snp_nt`: the nucleotides
+  involved (only with *Add nucleotide-level variant columns* on)
+- one count column per sample
+
+To get counts per mature miRNA, sum the sample columns by `miRNA`.
+
+When nucleotide-level columns are requested, reads whose precursor or mature
+miRNA is missing from the hairpin FASTA or annotation are left out of the
+table.
+    ]]></help>
+    <expand macro="citations"/>
+</tool>

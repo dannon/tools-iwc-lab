@@ -1,0 +1,47 @@
+<macros>
+    <token name="@TOOL_VERSION@">0.4.30</token>
+    <token name="@VERSION_SUFFIX@">0</token>
+    <token name="@PROFILE@">25.0</token>
+    <xml name="bio_tools">
+        <xrefs>
+            <xref type="bio.tools">miRTop</xref>
+        </xrefs>
+    </xml>
+    <xml name="requirements">
+        <requirements>
+            <requirement type="package" version="@TOOL_VERSION@">mirtop</requirement>
+            <!-- mirtop imports pkg_resources and six, but the bioconda recipe doesn't declare them -->
+            <requirement type="package" version="80.10.2">setuptools</requirement>
+            <requirement type="package" version="1.17.0">six</requirement>
+            <yield/>
+        </requirements>
+    </xml>
+    <xml name="species_param">
+        <param argument="--sps" type="text" value="hsa" label="Species code" help="miRBase three-letter species prefix, e.g. hsa, mmu or dme. Only hairpins whose FASTA header contains this code are used.">
+            <validator type="regex" message="Use letters, digits, underscores or hyphens only">^[A-Za-z0-9_-]+$</validator>
+        </param>
+    </xml>
+    <!-- mirtop reads both files as plain text, so decompress gzipped ones first -->
+    <token name="@STAGE_ANNOTATION@"><![CDATA[
+#if $hairpin.is_of_type('fasta.gz')
+    gunzip -c '$hairpin' > hairpin.fa &&
+#else
+    ln -s '$hairpin' hairpin.fa &&
+#end if
+#if $gtf.is_of_type('gff3.gz')
+    gunzip -c '$gtf' > annotation.gff3 &&
+#else
+    ln -s '$gtf' annotation.gff3 &&
+#end if
+    ]]></token>
+    <xml name="annotation_params">
+        <param argument="--hairpin" type="data" format="fasta,fasta.gz" label="Hairpin (precursor) sequences" help="For example miRBase hairpin.fa. These must be the same sequences the reads were aligned to."/>
+        <param argument="--gtf" type="data" format="gff3,gff3.gz" label="Mature miRNA annotation" help="miRBase (or MirGeneDB) GFF3 with precursor and mature miRNA positions, e.g. hsa.gff3."/>
+        <expand macro="species_param"/>
+    </xml>
+    <xml name="citations">
+        <citations>
+            <citation type="doi">10.1093/bioinformatics/btz675</citation>
+        </citations>
+    </xml>
+</macros>
