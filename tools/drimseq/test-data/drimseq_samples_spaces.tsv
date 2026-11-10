@@ -1,0 +1,7 @@
+sample	condition	extra
+ctl 1	 control	x
+ctl 2	control 	x
+ctl 3	control	x
+trt 1	treated	x
+trt 2	treated	x
+trt 3	treated	x
