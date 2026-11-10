@@ -1,0 +1,16 @@
+categories:
+- Sequence Analysis
+- Fastq Manipulation
+- RNA
+description: iCount-Mini tools for processing iCLIP data
+homepage_url: https://github.com/ulelab/iCount-Mini
+remote_repository_url: https://github.com/galaxyproject/tools-iwc-lab/tree/main/tools/icount
+long_description: |
+  iCount-Mini is the maintained fork of iCount, the Ule lab's pipeline for
+  iCLIP data on protein-RNA interactions. This repository wraps its
+  demultiplex command, which splits a multiplexed iCLIP FASTQ file by
+  experimental barcode, moves the randomer (UMI) bases into the read name
+  and removes the 3' adapter.
+name: icount
+owner: iwc-lab
+type: unrestricted
