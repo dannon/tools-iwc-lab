@@ -1,0 +1,10 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr1,length=12000>
+##ALT=<ID=DEL,Description="Deletion">
+##INFO=<ID=SVTYPE,Number=1,Type=String,Description="Type of structural variant">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the variant">
+##INFO=<ID=SVLEN,Number=.,Type=Integer,Description="Difference in length between REF and ALT alleles">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	deletion	normal
+chr1	5000	del1	N	<DEL>	60	PASS	SVTYPE=DEL --output_file escape;END=6000;SVLEN=-1000	GT	0/1	0/0
+chr1	8000	del2	N	<DEL>	10	PASS	SVTYPE=DEL;END=8600;SVLEN=-600	GT	0/0	0/1

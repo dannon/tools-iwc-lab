@@ -1,0 +1,14 @@
+categories:
+- RNA
+- Sequence Analysis
+description: Collapse identical small RNA reads with seqcluster
+homepage_url: https://github.com/lpantano/seqcluster
+long_description: |
+  seqcluster is a toolkit for small RNA-seq analysis. This repository wraps
+  seqcluster collapse, which merges identical reads in a trimmed small RNA
+  FASTQ file into unique sequences annotated with their read counts. It is
+  the collapsing step used by nf-core/smrnaseq.
+name: seqcluster
+owner: iwc-lab
+remote_repository_url: https://github.com/galaxyproject/tools-iwc-lab/tree/main/tools/seqcluster
+type: unrestricted

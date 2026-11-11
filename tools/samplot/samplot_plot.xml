@@ -1,0 +1,330 @@
+<tool id="samplot_plot" name="Samplot plot" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>structural variant evidence in a genomic region</description>
+    <macros>
+        <import>macros.xml</import>
+    </macros>
+    <expand macro="xrefs"/>
+    <expand macro="requirements"/>
+    <version_command>samplot --version</version_command>
+    <command detect_errors="aggressive"><![CDATA[
+#import re
+#if str($titles).strip()
+    #set $title_list = [t.strip() for t in str($titles).split(',')]
+    ## samplot silently drops all titles when the count is off
+    #if len($title_list) != len($alignments) or '' in $title_list
+        echo 'Give exactly one non-empty title per alignment file, separated by commas' >&2 && exit 1 &&
+    #end if
+#end if
+@LINK_ALIGNMENTS@
+#if $tracks.transcripts
+    ## a literal hash would start a Cheetah comment, hence the [#] classes
+    awk '/^[#][#]FASTA/{exit} !/^[#]/' '$tracks.transcripts' | LC_ALL=C sort -t \$'\t' -k1,1 -k4,4n > transcripts.gff3 &&
+    python -c "import pysam; pysam.tabix_index('transcripts.gff3', preset='gff', force=True)" &&
+#end if
+#set $annotation_names = []
+#if $tracks.annotations
+#for $i, $annotation in enumerate($tracks.annotations)
+    awk '!/^[#]/ && !/^(track|browser)([ \t]|$)/' '$annotation' | LC_ALL=C sort -t \$'\t' -k1,1 -k2,2n > 'annotation_${i}.bed' &&
+    python -c "import pysam; pysam.tabix_index('annotation_${i}.bed', preset='bed', force=True)" &&
+    #silent $annotation_names.append(re.sub(r'[^\w\-. ]', '_', str($annotation.element_identifier)))
+#end for
+#end if
+
+samplot plot
+    --bams
+    #for $aln in $staged_alignments
+        '$aln'
+    #end for
+    --titles
+    #if str($titles).strip()
+        #for $title in $title_list
+            '$title'
+        #end for
+    #else
+        #for $aln in $alignments
+            '${re.sub(r"[^\w\-. ]", "_", str($aln.element_identifier))}'
+        #end for
+    #end if
+    @REFERENCE_ARG@
+    --chrom '$chrom'
+    --start $start
+    --end $end
+    #if str($sv.sv_type) != 'none'
+        --sv_type '$sv.sv_type'
+        #if str($sv.sv_type) == 'BND'
+            --chrom '$sv.chrom2'
+            --start $sv.start2
+            --end $sv.end2
+        #end if
+    #end if
+    #if $tracks.transcripts
+        --transcript_file transcripts.gff3.gz
+        --transcript_filename '${re.sub(r"[^\w\-. ]", "_", str($tracks.transcripts.element_identifier))}'
+    #end if
+    #if $tracks.annotations
+        --annotation_files
+        #for $i, $annotation in enumerate($tracks.annotations)
+            'annotation_${i}.bed.gz'
+        #end for
+        --annotation_filenames
+        #for $name in $annotation_names
+            '$name'
+        #end for
+        $tracks.hide_annotation_labels
+    #end if
+    #if str($reads.window)
+        --window $reads.window
+    #end if
+    --zoom $reads.zoom
+    --max_depth $reads.max_depth
+    --include_mqual $reads.include_mqual
+    --separate_mqual $reads.separate_mqual
+    --z $reads.z
+    --long_read $reads.long_read
+    --min_event_size $reads.min_event_size
+    $reads.ignore_hp
+    #if str($reads.max_coverage)
+        --max_coverage $reads.max_coverage
+    #end if
+    --coverage_tracktype '$appearance.coverage_tracktype'
+    $appearance.coverage_only
+    $appearance.same_yaxis_scales
+    $appearance.common_insert_size
+    #if str($appearance.plot_height)
+        --plot_height $appearance.plot_height
+    #end if
+    #if str($appearance.plot_width)
+        --plot_width $appearance.plot_width
+    #end if
+    --marker_size $appearance.marker_size
+    --dpi $appearance.dpi
+    --output_file 'samplot.${output_format}'
+&& mv 'samplot.${output_format}' '$plot'
+    ]]></command>
+    <inputs>
+        <expand macro="alignments_param"/>
+        <param argument="--titles" type="text" value="" label="Sample titles" help="Comma-separated titles, one per alignment file and in the same order. Leave empty to use the dataset names.">
+            <validator type="regex" message="Titles may contain letters, digits, spaces, commas, dots, underscores and dashes">^[\w\-., ]*$</validator>
+        </param>
+        <expand macro="reference_param"/>
+        <param argument="--chrom" type="text" label="Chromosome" help="Must match the sequence names in the alignment header, e.g. chr1 or 1">
+            <validator type="regex" message="Enter a single sequence name without spaces">^[^\s']+$</validator>
+        </param>
+        <param argument="--start" type="integer" min="0" value="" label="Start position" help="Start of the region or variant"/>
+        <param argument="--end" type="integer" min="1" value="" label="End position" help="End of the region or variant"/>
+        <conditional name="sv">
+            <param argument="--sv_type" type="select" label="Structural variant type" help="Draws a variant bar above the panels. Choose None to plot the region only.">
+                <option value="none" selected="true">None (plot the region only)</option>
+                <option value="DEL">Deletion (DEL)</option>
+                <option value="DUP">Duplication (DUP)</option>
+                <option value="INV">Inversion (INV)</option>
+                <option value="INS">Insertion (INS)</option>
+                <option value="BND">Translocation / breakend (BND)</option>
+            </param>
+            <when value="none"/>
+            <when value="DEL"/>
+            <when value="DUP"/>
+            <when value="INV"/>
+            <when value="INS"/>
+            <when value="BND">
+                <param name="chrom2" type="text" label="Chromosome of the second breakpoint">
+                    <validator type="regex" message="Enter a single sequence name without spaces">^[^\s']+$</validator>
+                </param>
+                <param name="start2" type="integer" min="0" value="" label="Start of the second breakpoint"/>
+                <param name="end2" type="integer" min="1" value="" label="End of the second breakpoint"/>
+            </when>
+        </conditional>
+        <section name="tracks" title="Annotation tracks" expanded="false">
+            <param name="transcripts" argument="--transcript_file" type="data" format="gff3" optional="true" label="Transcripts" help="GFF3 of genes and transcripts to draw under the alignments. It is sorted and indexed for you."/>
+            <param name="annotations" argument="--annotation_files" type="data" format="bed" multiple="true" optional="true" label="Annotation tracks" help="BED files such as repeats or mappability, one track each. Track names come from the dataset names."/>
+            <param argument="--hide_annotation_labels" type="boolean" truevalue="--hide_annotation_labels" falsevalue="" checked="false" label="Hide annotation labels" help="Hide the name column of the annotation BED files. Useful for regions with many features."/>
+        </section>
+        <section name="reads" title="Read and window options" expanded="false">
+            <param argument="--window" type="integer" min="1" optional="true" value="" label="Window size" help="Number of bases to add on each side of the variant. Only used when an SV type is set. Default: half the variant length, widened to 1.5 times the fragment length for small variants."/>
+            <param argument="--zoom" type="integer" min="1" value="500000" label="Zoom" help="Only show this many bases around each breakpoint; much faster for large regions. Ignored for regions smaller than this."/>
+            <param argument="--max_depth" type="integer" min="0" value="1" label="Maximum number of normal pairs to plot"/>
+            <param argument="--include_mqual" type="integer" min="0" value="1" label="Minimum mapping quality" help="Reads below this mapping quality are left out of the plot."/>
+            <param argument="--separate_mqual" type="integer" value="0" label="Low mapping quality threshold for coverage" help="Coverage from reads with MAPQ at or below this value is drawn in a lighter grey. Use a negative value to disable."/>
+            <param argument="--z" type="integer" min="0" value="4" label="Insert size cutoff (standard deviations)" help="Pairs whose insert size is more than this many standard deviations from the mean are treated as discordant."/>
+            <param argument="--long_read" type="integer" min="1" value="1000" label="Minimum long-read length" help="Reads at least this long are drawn as long reads."/>
+            <param argument="--min_event_size" type="integer" min="1" value="20" label="Minimum long-read CIGAR event size" help="Smallest insertion or deletion inside a long-read alignment to draw."/>
+            <param argument="--ignore_hp" type="boolean" truevalue="--ignore_hp" falsevalue="" checked="false" label="Ignore HP tag" help="By default reads carrying a haplotype (HP) tag are drawn per haplotype."/>
+            <param argument="--max_coverage" type="integer" min="1" optional="true" value="" label="Maximum coverage" help="Cap the coverage axis at this depth. Unlimited by default."/>
+        </section>
+        <section name="appearance" title="Plot appearance" expanded="false">
+            <param argument="--coverage_tracktype" type="select" label="Coverage track type" help="How the coverage of low mapping quality reads is combined with the rest.">
+                <option value="stack" selected="true">Stack</option>
+                <option value="superimpose">Superimpose</option>
+                <option value="none">None</option>
+            </param>
+            <param argument="--coverage_only" type="boolean" truevalue="--coverage_only" falsevalue="" checked="false" label="Show coverage only" help="Hide the reads and show only the coverage track."/>
+            <param argument="--same_yaxis_scales" type="boolean" truevalue="--same_yaxis_scales" falsevalue="" checked="false" label="Use the same Y axis scale for all samples"/>
+            <param argument="--common_insert_size" type="boolean" truevalue="--common_insert_size" falsevalue="" checked="false" label="Use a common insert size for all samples"/>
+            <param argument="--plot_height" type="integer" min="1" optional="true" value="" label="Plot height (inches)" help="Default: scaled with the number of samples."/>
+            <param argument="--plot_width" type="integer" min="1" optional="true" value="" label="Plot width (inches)"/>
+            <param argument="--marker_size" type="integer" min="1" value="3" label="Marker size" help="Size of the marks on pairs and split reads."/>
+            <param argument="--dpi" type="integer" min="50" max="1200" value="300" label="Resolution (dots per inch)"/>
+        </section>
+        <param name="output_format" type="select" label="Output format">
+            <option value="png" selected="true">PNG</option>
+            <option value="pdf">PDF</option>
+            <option value="svg">SVG</option>
+        </param>
+    </inputs>
+    <outputs>
+        <data name="plot" format="png" label="${tool.name} on ${on_string}: ${chrom}:${start}-${end}">
+            <change_format>
+                <when input="output_format" value="pdf" format="pdf"/>
+                <when input="output_format" value="svg" format="svg"/>
+            </change_format>
+        </data>
+    </outputs>
+    <tests>
+        <!-- deletion and control sample, default titles, PNG -->
+        <test expect_num_outputs="1">
+            <param name="alignments" value="deletion.bam,normal.bam" ftype="bam"/>
+            <param name="chrom" value="chr1"/>
+            <param name="start" value="5000"/>
+            <param name="end" value="6000"/>
+            <conditional name="sv">
+                <param name="sv_type" value="DEL"/>
+            </conditional>
+            <output name="plot" ftype="png">
+                <assert_contents>
+                    <has_image_width min="1000"/>
+                    <has_size min="20000"/>
+                </assert_contents>
+            </output>
+            <assert_command>
+                <has_text text="--sv_type 'DEL'"/>
+                <has_text text="'deletion.bam'"/>
+                <has_text text="'normal.bam'"/>
+            </assert_command>
+        </test>
+        <!-- CRAM with a reference, custom title, SVG -->
+        <test expect_num_outputs="1">
+            <param name="alignments" value="deletion.cram" ftype="cram"/>
+            <param name="reference" value="ref.fa" ftype="fasta"/>
+            <param name="titles" value="carrier sample"/>
+            <param name="chrom" value="chr1"/>
+            <param name="start" value="5000"/>
+            <param name="end" value="6000"/>
+            <conditional name="sv">
+                <param name="sv_type" value="DEL"/>
+            </conditional>
+            <param name="output_format" value="svg"/>
+            <output name="plot" ftype="svg">
+                <assert_contents>
+                    <has_text text="&lt;svg"/>
+                    <has_size min="20000"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- region only, with transcript and annotation tracks, PDF -->
+        <test expect_num_outputs="1">
+            <param name="alignments" value="normal.bam" ftype="bam"/>
+            <param name="chrom" value="chr1"/>
+            <param name="start" value="5000"/>
+            <param name="end" value="6000"/>
+            <section name="tracks">
+                <param name="transcripts" value="transcripts.gff3" ftype="gff3"/>
+                <param name="annotations" value="repeats.bed" ftype="bed"/>
+                <param name="hide_annotation_labels" value="true"/>
+            </section>
+            <section name="appearance">
+                <param name="coverage_only" value="true"/>
+                <param name="dpi" value="100"/>
+            </section>
+            <param name="output_format" value="pdf"/>
+            <output name="plot" ftype="pdf">
+                <assert_contents>
+                    <has_text text="%PDF"/>
+                    <has_size min="5000"/>
+                </assert_contents>
+            </output>
+            <assert_command>
+                <not_has_text text="--sv_type"/>
+                <has_text text="--transcript_file transcripts.gff3.gz"/>
+                <has_text text="'annotation_0.bed.gz'"/>
+                <has_text text="--coverage_only"/>
+            </assert_command>
+        </test>
+        <!-- breakend: both breakpoints are passed and the plot gets two panels per sample -->
+        <test expect_num_outputs="1">
+            <param name="alignments" value="deletion.bam" ftype="bam"/>
+            <param name="chrom" value="chr1"/>
+            <param name="start" value="3000"/>
+            <param name="end" value="3001"/>
+            <conditional name="sv">
+                <param name="sv_type" value="BND"/>
+                <param name="chrom2" value="chr1"/>
+                <param name="start2" value="9000"/>
+                <param name="end2" value="9001"/>
+            </conditional>
+            <section name="reads">
+                <param name="window" value="500"/>
+            </section>
+            <output name="plot" ftype="png">
+                <assert_contents>
+                    <has_size min="20000"/>
+                </assert_contents>
+            </output>
+            <assert_command>
+                <has_text text="--chrom 'chr1' --start 3000 --end 3001"/>
+                <has_text text="--chrom 'chr1' --start 9000 --end 9001"/>
+            </assert_command>
+        </test>
+        <!-- a title count that does not match the inputs fails instead of being ignored -->
+        <test expect_failure="true">
+            <param name="alignments" value="deletion.bam,normal.bam" ftype="bam"/>
+            <param name="titles" value="only one"/>
+            <param name="chrom" value="chr1"/>
+            <param name="start" value="5000"/>
+            <param name="end" value="6000"/>
+            <assert_stderr>
+                <has_text text="one non-empty title per alignment file"/>
+            </assert_stderr>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+Samplot draws the alignment evidence for a structural variant (SV) in one or
+more samples: read depth, discordant read pairs, split reads and long-read
+alignments, one panel per sample. Looking at the evidence side by side makes
+it quick to tell real SVs from false calls, and to compare a carrier with
+controls or parents.
+
+## Inputs
+
+- **Alignment files**: one or more coordinate-sorted BAM or CRAM files. Each
+  file becomes a panel, titled with the dataset name unless you give your own
+  titles.
+- **Sample titles** (optional): comma-separated, one per alignment file and in
+  the same order.
+- **Reference genome**: only needed for CRAM input.
+- **Region**: chromosome, start and end. For an SV this is the variant
+  itself; samplot adds a window on each side. For a translocation (BND) give
+  the second breakpoint as well.
+- **SV type**: DEL, DUP, INV, INS or BND. This draws the variant bar above the
+  panels and adds the window around the variant; choose *None* to plot exactly
+  the region you entered.
+- **Annotation tracks** (optional): a GFF3 of transcripts, and BED files such
+  as repeats or mappability. They are sorted, compressed and indexed inside
+  the job, so plain uncompressed files are fine.
+
+## Output
+
+A single image in PNG, PDF or SVG format.
+
+## Reading the plot
+
+Discordant pairs and split reads are drawn as lines between their two ends,
+with the Y position giving the insert size. Colours encode the orientation of
+the pair (deletion-type, duplication-type or inversion-type evidence), as
+shown in the legend. The grey background is the read depth.
+
+For more detail see the [samplot documentation](https://github.com/ryanlayer/samplot).
+    ]]></help>
+    <expand macro="citations"/>
+</tool>

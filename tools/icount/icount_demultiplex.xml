@@ -1,0 +1,273 @@
+<tool id="icount_demultiplex" name="iCount demultiplex" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>split iCLIP reads by experimental barcode and move randomers into read names</description>
+    <macros>
+        <import>macros.xml</import>
+    </macros>
+    <expand macro="requirements"/>
+    <expand macro="version_command"/>
+    <command detect_errors="aggressive"><![CDATA[
+#set $has_3prime = False
+#set $mixed = ''
+#for $b in $barcodes
+    #if str($b.barcode3).strip()
+        #set $has_3prime = True
+    #else
+        #for $c in $barcodes
+            #if str($c.barcode3).strip() and str($c.barcode5) == str($b.barcode5)
+                #set $mixed = str($b.barcode5)
+            #end if
+        #end for
+    #end if
+#end for
+#if $reads.is_of_type('fastqsanger.gz')
+    #set $reads_name = 'input.fastq.gz'
+#else
+    #set $reads_name = 'input.fastq'
+#end if
+#if $mixed
+    ## iCount accepts this, but the 5'-only experiment's reads end up in the 3' no-match file
+    echo "5' barcode" '$mixed' "is listed both with and without a 3' barcode. Give every entry with this 5' barcode a 3' barcode." >&2 &&
+    exit 1 &&
+#end if
+## iCount writes cutadapt temp files under ICOUNT_TMP_ROOT; keep them inside the job directory
+export ICOUNT_TMP_ROOT="\$PWD/icount_tmp" &&
+mkdir -p demux unassigned &&
+ln -s '$reads' '$reads_name' &&
+iCount-Mini demultiplex
+    '$reads_name'
+    '$adapter'
+    #for $b in $barcodes
+        '$b.barcode5'
+    #end for
+    #if $has_3prime
+        --barcodes3
+        #for $b in $barcodes
+            #if str($b.barcode3).strip()
+                '$b.barcode3'
+            #else
+                .
+            #end if
+        #end for
+    #end if
+    --mismatches $mismatches
+    --minimum_length $minimum_length
+    --min_adapter_overlap $min_adapter_overlap
+    --out_dir demux
+&&
+mv demux/demux_nomatch5.fastq.gz '$nomatch'
+#if $has_3prime
+    ## reads that passed the 5' step but could not be placed by their 3' barcode
+    && mv demux/no_adapter_found_*.fastq.gz demux/demux_*_nomatch.fastq.gz unassigned/
+#end if
+    ]]></command>
+    <inputs>
+        <param name="reads" type="data" format="fastqsanger,fastqsanger.gz" label="iCLIP reads" help="Single-end reads that still carry the experimental barcode, randomer and 3' adapter."/>
+        <param name="adapter" type="text" value="AGATCGGAAGAGCGGTTCAG" label="3' adapter sequence" help="Removed from the 3' end of each read with cutadapt after demultiplexing.">
+            <validator type="regex" message="Use only the letters A, C, G and T">^[ACGT]+$</validator>
+        </param>
+        <repeat name="barcodes" title="Experiment barcode" min="1" default="2">
+            <param name="barcode5" type="text" value="" label="5' barcode" help="Experimental barcode at the 5' end of the read, with N marking each randomer (UMI) position, e.g. NNNGGTTNN.">
+                <validator type="regex" message="Use A, C, G, T and N only, with at least one non-N base">^N*[ACGT][ACGTN]*$</validator>
+            </param>
+            <param name="barcode3" argument="--barcodes3" type="text" value="" optional="true" label="3' barcode (optional)" help="Experimental barcode just before the 3' adapter, with N for randomer positions. Leave empty when this experiment has only a 5' barcode.">
+                <validator type="regex" message="Use A, C, G, T and N only, with at least one non-N base">^(N*[ACGT][ACGTN]*)?$</validator>
+            </param>
+        </repeat>
+        <param argument="--mismatches" type="integer" min="0" value="1" label="Mismatches tolerated in the 5' barcode" help="Counted over the non-randomer positions. 3' barcodes are always matched exactly."/>
+        <param argument="--minimum_length" type="integer" min="0" value="15" label="Minimum read length after barcode removal" help="Reads shorter than this once the 5' barcode is cut off are discarded, before adapter trimming. With 3' barcodes the check is repeated after the adapter and 3' barcode are removed."/>
+        <param argument="--min_adapter_overlap" type="integer" min="1" value="7" label="Minimum adapter overlap for 3' barcode assignment" help="Only used when 3' barcodes are given: a read must show at least this many bases of the adapter before its 3' barcode is trusted. Reads that do not are reported as unassigned."/>
+    </inputs>
+    <outputs>
+        <collection name="demultiplexed" type="list" format="fastqsanger.gz" label="${tool.name} on ${on_string}: demultiplexed reads">
+            <discover_datasets pattern="demux_(?P&lt;designation&gt;.+)\.fastq\.gz" directory="demux" format="fastqsanger.gz" sort_by="designation"/>
+        </collection>
+        <data name="nomatch" format="fastqsanger.gz" label="${tool.name} on ${on_string}: no barcode match"/>
+        <collection name="unassigned" type="list" format="fastqsanger.gz" label="${tool.name} on ${on_string}: unassigned by 3' barcode">
+            <discover_datasets pattern="(?P&lt;designation&gt;.+)\.fastq\.gz" directory="unassigned" format="fastqsanger.gz" sort_by="designation"/>
+            <filter>any(b['barcode3'] for b in barcodes)</filter>
+        </collection>
+    </outputs>
+    <tests>
+        <!-- two 5' barcodes with randomers, plain FASTQ; read31 has one barcode mismatch, read32 is 13 nt after the barcode -->
+        <test expect_num_outputs="2">
+            <param name="reads" value="icount_5prime.fastq" ftype="fastqsanger"/>
+            <repeat name="barcodes">
+                <param name="barcode5" value="NNNGGTTNN"/>
+            </repeat>
+            <repeat name="barcodes">
+                <param name="barcode5" value="NNNTTGTNN"/>
+            </repeat>
+            <param name="mismatches" value="1"/>
+            <param name="minimum_length" value="10"/>
+            <output_collection name="demultiplexed" type="list" count="2">
+                <element name="NNNGGTTNN" decompress="true" ftype="fastqsanger.gz">
+                    <assert_contents>
+                        <has_n_lines n="32"/>
+                        <has_line line="@read1:rbc:AAGCC"/>
+                        <has_line line="CAATAAACCACTCTGACTGGCCGAATAGGG"/>
+                        <has_line line="@read31:rbc:AAACC"/>
+                        <has_line line="GCTAAAGACAATTACATAACATACACGTCA"/>
+                        <has_line line="@read32:rbc:CCCAA"/>
+                        <not_has_text text="AGATCGGAAG"/>
+                    </assert_contents>
+                </element>
+                <element name="NNNTTGTNN" decompress="true" ftype="fastqsanger.gz">
+                    <assert_contents>
+                        <has_n_lines n="24"/>
+                        <has_line line="@read7:rbc:TGTGT"/>
+                        <has_line line="TCCGCAAGAATCAACAACTACAATGGCGCG"/>
+                        <not_has_text text="AGATCGGAAG"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <output name="nomatch" ftype="fastqsanger.gz" decompress="true">
+                <assert_contents>
+                    <has_n_lines n="12"/>
+                    <has_line line="@read13"/>
+                    <has_line line="AAACACAACCATCTGTTTCTTGCGTCGTAGCGGGACCCT"/>
+                    <not_has_text text=":rbc:"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- gzipped input, two 3' barcodes on one 5' barcode, a 5'-only experiment, exact 5' matching and a short adapter overlap -->
+        <test expect_num_outputs="3">
+            <param name="reads" value="icount_5prime_3prime.fastq.gz" ftype="fastqsanger.gz"/>
+            <repeat name="barcodes">
+                <param name="barcode5" value="NNNGGTTNN"/>
+                <param name="barcode3" value="NNATCG"/>
+            </repeat>
+            <repeat name="barcodes">
+                <param name="barcode5" value="NNNGGTTNN"/>
+                <param name="barcode3" value="NNGCTA"/>
+            </repeat>
+            <repeat name="barcodes">
+                <param name="barcode5" value="NNNTTGTNN"/>
+            </repeat>
+            <param name="mismatches" value="0"/>
+            <param name="min_adapter_overlap" value="5"/>
+            <output_collection name="demultiplexed" type="list" count="3">
+                <element name="NNNGGTTNN_NNATCG" decompress="true">
+                    <assert_contents>
+                        <has_n_lines n="20"/>
+                        <!-- 3' randomer comes first, then the 5' one -->
+                        <has_line line="@read16:rbc:AGAACCA"/>
+                        <has_line line="CCCTACTGGCACGAAGTTCACAGAAGTG"/>
+                        <!-- only 6 adapter bases: kept because the overlap is 5 -->
+                        <has_line line="@read35:rbc:CACGTGA"/>
+                    </assert_contents>
+                </element>
+                <element name="NNNGGTTNN_NNGCTA" decompress="true">
+                    <assert_contents>
+                        <has_n_lines n="12"/>
+                    </assert_contents>
+                </element>
+                <element name="NNNTTGTNN" decompress="true">
+                    <assert_contents>
+                        <has_n_lines n="12"/>
+                        <has_line line="TAATCGAAGAGGGTCCTCCCATCTCCTGTG"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <output name="nomatch" decompress="true">
+                <assert_contents>
+                    <has_n_lines n="4"/>
+                    <has_line line="@read33"/>
+                </assert_contents>
+            </output>
+            <output_collection name="unassigned" type="list" count="2">
+                <element name="demux_NNNGGTTNN_nomatch" decompress="true">
+                    <assert_contents>
+                        <has_n_lines n="4"/>
+                        <has_line line="@read34:rbc:TTACA"/>
+                    </assert_contents>
+                </element>
+                <element name="no_adapter_found_NNNGGTTNN" decompress="true">
+                    <assert_contents>
+                        <has_n_lines n="8"/>
+                        <not_has_text text="@read35"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- the same 5' barcode with and without a 3' barcode is rejected -->
+        <test expect_failure="true">
+            <param name="reads" value="icount_5prime_3prime.fastq.gz" ftype="fastqsanger.gz"/>
+            <repeat name="barcodes">
+                <param name="barcode5" value="NNNGGTTNN"/>
+                <param name="barcode3" value="NNATCG"/>
+            </repeat>
+            <repeat name="barcodes">
+                <param name="barcode5" value="NNNGGTTNN"/>
+            </repeat>
+            <assert_stderr>
+                <has_text text="is listed both with and without a 3' barcode"/>
+            </assert_stderr>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+Splits a multiplexed iCLIP (or eCLIP/irCLIP-style) FASTQ file into one file per
+experiment, using the experimental barcode at the 5' end of each read and,
+optionally, a second barcode just before the 3' adapter. It uses the
+`demultiplex` command of [iCount-Mini](https://github.com/ulelab/iCount-Mini),
+the maintained fork of the iCount iCLIP pipeline from the Ule lab.
+
+For every read assigned to an experiment, the tool:
+
+1. cuts off the barcode,
+2. appends the randomer (UMI) bases, i.e. the `N` positions of the barcode, to
+   the read name as `:rbc:<randomer>`, where later PCR-duplicate removal and
+   cross-link counting expect it (with 3' barcodes the 3' randomer comes first,
+   followed by the 5' one),
+3. removes the 3' adapter with cutadapt.
+
+## Barcodes
+
+Give one entry per experiment. Write each barcode as it appears in the read, with
+`N` for every randomer position and A/C/G/T for the experimental part. Classic
+iCLIP barcodes look like `NNNGGTTNN` (3 + 2 randomer bases around a 4 nt
+experimental barcode); iCLIP2 uses longer ones such as `NNNNNCTGCNNNN`.
+
+The experiment is chosen by counting matches at the non-`N` positions; reads
+with more mismatches than allowed against every barcode go to the *no barcode
+match* output, untrimmed. A read that is equally close to two barcodes goes to
+the one listed first. To avoid such ties, keep the experimental parts of your
+barcodes different in at least twice the allowed number of mismatches plus one
+positions (3 positions for the default of 1 mismatch).
+
+When 3' barcodes are used, each experiment is a pair of 5' and 3' barcodes, and
+the same 5' barcode may appear in several pairs. 3' barcodes must match exactly,
+and a read is only placed by its 3' barcode when at least the *minimum adapter
+overlap* bases of the adapter are found, since shorter reads may never reach the
+3' barcode. A 5' barcode must either always or never be paired with a 3'
+barcode; mixing the two for the same 5' barcode is rejected, because the
+5'-only experiment's reads would otherwise be lost.
+
+## Outputs
+
+- **Demultiplexed reads**: a list collection with one gzipped FASTQ per
+  experiment, named after its barcode (`NNNGGTTNN`, or `NNNGGTTNN_NNATCG` for
+  a 5'/3' pair).
+- **No barcode match**: reads whose 5' end matched no barcode.
+- **Unassigned by 3' barcode** (only with 3' barcodes): for each 5' barcode
+  that has 3' barcodes, reads in which no adapter was found
+  (`no_adapter_found_<barcode5>`) and reads whose 3' end matched none of its
+  3' barcodes (`demux_<barcode5>_nomatch`).
+
+## Dropped reads
+
+Some reads appear in no output at all:
+
+- reads shorter than the longest 5' barcode,
+- reads shorter than the *minimum length* once the 5' barcode is cut off
+  (checked before adapter trimming; this also applies to reads with no barcode
+  match),
+- with 3' barcodes, reads shorter than the *minimum length* once the adapter
+  and 3' barcode are removed.
+
+Read names are cut at the first space, so Illumina comments such as
+`1:N:0:ATCACG` are not kept.
+    ]]></help>
+    <expand macro="citations"/>
+</tool>
