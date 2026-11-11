@@ -1,0 +1,15 @@
+name: rmats
+owner: iwc-lab
+description: Differential alternative splicing between two groups of RNA-seq samples
+long_description: |
+  rMATS-turbo detects alternative splicing events (skipped exons, alternative 5' and 3' splice
+  sites, mutually exclusive exons and retained introns) from RNA-seq alignments and tests whether
+  their inclusion levels differ between two groups of replicates, with either the unpaired rMATS
+  model or the paired PAIRADISE model. This wrapper covers the BAM-input mode.
+categories:
+- Transcriptomics
+- RNA
+- Statistics
+homepage_url: https://github.com/Xinglab/rmats-turbo
+remote_repository_url: https://github.com/galaxyproject/tools-iwc-lab/tree/main/tools/rmats
+type: unrestricted
