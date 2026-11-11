@@ -1,0 +1,661 @@
+<tool id="drimseq" name="DRIMSeq" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>filter transcripts and test for differential transcript usage</description>
+    <macros>
+        <token name="@TOOL_VERSION@">1.38.0</token>
+        <token name="@VERSION_SUFFIX@">0</token>
+        <token name="@PROFILE@">25.1</token>
+    </macros>
+    <xrefs>
+        <xref type="bio.tools">drimseq</xref>
+        <xref type="bioconductor">drimseq</xref>
+    </xrefs>
+    <requirements>
+        <requirement type="package" version="@TOOL_VERSION@">bioconductor-drimseq</requirement>
+        <requirement type="package" version="1.38.2">bioconductor-tximport</requirement>
+    </requirements>
+    <version_command><![CDATA[Rscript -e 'cat(as.character(packageVersion("DRIMSeq")))']]></version_command>
+    <!-- exit_code: Rscript exits non-zero on any stop(), and the progress messages on stderr quote transcript
+         and sample IDs from the user's files, which the aggressive phrase check could take for an error -->
+    <command detect_errors="exit_code"><![CDATA[
+ln -s '$tx2gene' tx2gene.tsv &&
+ln -s '$samples' samples.txt &&
+#if str($input.type) == "matrix":
+    ln -s '$input.counts_matrix' counts_matrix.tsv &&
+#end if
+Rscript '$drimseq_script'
+    ]]></command>
+    <configfiles>
+        <configfile name="quant_table"><![CDATA[#import re
+#if str($input.type) == "quant":
+#for $f in $input.quant_files:
+${re.sub(r'[^A-Za-z0-9_.-]', '_', str($f.element_identifier))}	${f}
+#end for
+#end if
+]]></configfile>
+        <configfile name="drimseq_script"><![CDATA[
+suppressPackageStartupMessages({
+    library(DRIMSeq)
+    library(BiocParallel)
+})
+
+## sample names become column headers and are matched against the sample table,
+## so both sides get the same restricted character set
+clean_names <- function(x) gsub("[^A-Za-z0-9_.-]", "_", x)
+
+threads <- as.integer(Sys.getenv("GALAXY_SLOTS", "1"))
+bpparam <- if (threads > 1) MulticoreParam(workers = threads) else SerialParam()
+
+## first column transcript, second column gene; a header line is harmless because
+## it never matches a transcript ID
+tx2gene <- read.delim("tx2gene.tsv", header = FALSE, colClasses = "character", quote = "\"", comment.char = "", na.strings = character(0))
+if (ncol(tx2gene) < 2) {
+    stop("The transcript-to-gene table needs two columns: transcript ID, then gene ID.")
+}
+tx2gene <- data.frame(tx = tx2gene[[1]], gene_id = tx2gene[[2]])
+dup_tx <- duplicated(tx2gene[["tx"]])
+if (any(dup_tx)) {
+    message("Transcript-to-gene table lists ", sum(dup_tx), " transcripts more than once; using the first gene for each")
+    tx2gene <- tx2gene[!dup_tx, ]
+}
+
+#if str($input.type) == "quant":
+suppressPackageStartupMessages(library(tximport))
+quant <- read.delim("$quant_table", header = FALSE, colClasses = "character", quote = "", comment.char = "")
+if (anyDuplicated(quant[[1]])) {
+    stop("Two quantification files have the same sample name: ", paste(unique(quant[[1]][duplicated(quant[[1]])]), collapse = ", "))
+}
+files <- setNames(quant[[2]], quant[[1]])
+## dtuScaledTPM needs a gene for every quantified transcript. Like nf-core/rnasplice, give
+## unmapped transcripts (spike-ins, extra contigs) a gene of their own for the import and
+## drop them afterwards.
+quant_tx <- unique(unlist(lapply(files, function(f) {
+    read.delim(f, header = TRUE, colClasses = "character", quote = "", comment.char = "")[[1]]
+})))
+unmapped <- setdiff(quant_tx, tx2gene[["tx"]])
+## the placeholder genes must not share an ID with a real gene, or the unmapped transcript's
+## length would enter that gene's median and change its scaled counts
+prefix <- "unmapped__"
+while (any(startsWith(tx2gene[["gene_id"]], prefix))) {
+    prefix <- paste0("_", prefix)
+}
+txi <- tximport(
+    files,
+    type = "$input.quant_type",
+    txOut = TRUE,
+    countsFromAbundance = "$input.counts_from_abundance",
+    tx2gene = rbind(tx2gene, data.frame(tx = unmapped, gene_id = paste0(prefix, unmapped, recycle0 = TRUE))),
+    dropInfReps = TRUE
+)
+cts <- txi[["counts"]]
+#else:
+## read everything as text so a header that is one field short (R's write.table default)
+## or numeric-looking IDs cannot shift or coerce the transcript column
+raw <- read.delim("counts_matrix.tsv", header = FALSE, colClasses = "character", quote = "\"", comment.char = "",
+                  na.strings = character(0), check.names = FALSE)
+header <- unlist(raw[1, ], use.names = FALSE)
+raw <- raw[-1, , drop = FALSE]
+if (ncol(raw) < 2 || nrow(raw) == 0) {
+    stop("The count matrix needs a header line, then a transcript ID column followed by one column per sample.")
+}
+if (header[length(header)] == "") {
+    ## a header with no name for the ID column, as R's write.table writes by default
+    header <- c("", header[-length(header)])
+}
+cts <- suppressWarnings(apply(as.matrix(raw[, -1, drop = FALSE]), 2, as.numeric))
+cts <- matrix(cts, nrow = nrow(raw), dimnames = list(raw[[1]], header[-1]))
+if (anyNA(cts)) {
+    stop("The count matrix has empty or non-numeric values outside its first column.")
+}
+if (anyDuplicated(rownames(cts))) {
+    stop("The count matrix has duplicated transcript IDs, e.g. ", rownames(cts)[anyDuplicated(rownames(cts))])
+}
+#end if
+if (any(cts < 0)) {
+    stop("The counts include negative values.")
+}
+
+colnames(cts) <- clean_names(colnames(cts))
+if (anyDuplicated(colnames(cts))) {
+    stop("Sample names are not unique after replacing unusual characters with underscores.")
+}
+
+#if $samples.is_of_type("csv"):
+sheet <- read.csv("samples.txt", header = TRUE, check.names = FALSE, colClasses = "character",
+                  na.strings = character(0), strip.white = TRUE)
+#else:
+sheet <- read.delim("samples.txt", header = TRUE, check.names = FALSE, colClasses = "character", comment.char = "",
+                    na.strings = character(0), strip.white = TRUE)
+#end if
+if (!all(c("sample", "condition") %in% colnames(sheet))) {
+    stop("The sample table must have 'sample' and 'condition' column headers.")
+}
+sheet <- sheet[, c("sample", "condition")]
+## repeated rows for one sample (one per sequencing lane in rnasplice) are fine as long as
+## they agree; resolve them on the original names, before cleaning can merge different samples
+sheet <- sheet[!duplicated(sheet), ]
+conflicting <- unique(sheet[["sample"]][duplicated(sheet[["sample"]])])
+if (length(conflicting) > 0) {
+    stop("The sample table gives different conditions for: ", paste(conflicting, collapse = ", "))
+}
+cleaned <- clean_names(sheet[["sample"]])
+collisions <- unique(cleaned[duplicated(cleaned)])
+if (length(collisions) > 0) {
+    stop("Different sample names in the sample table become the same after replacing unusual characters with underscores: ",
+         paste(sheet[["sample"]][cleaned %in% collisions], collapse = ", "))
+}
+sheet[["sample"]] <- cleaned
+
+missing <- setdiff(colnames(cts), sheet[["sample"]])
+if (length(missing) > 0) {
+    stop("These samples have no row in the sample table: ", paste(missing, collapse = ", "),
+         ". The table's sample column must match the dataset names or matrix column headers.")
+}
+extra <- setdiff(sheet[["sample"]], colnames(cts))
+if (length(extra) > 0) {
+    message("Ignoring sample table rows with no counts: ", paste(extra, collapse = ", "))
+}
+sheet <- sheet[match(colnames(cts), sheet[["sample"]]), ]
+if (any(sheet[["condition"]] == "")) {
+    stop("These samples have an empty condition: ", paste(sheet[["sample"]][sheet[["condition"]] == ""], collapse = ", "))
+}
+samps <- data.frame(sample_id = sheet[["sample"]], condition = factor(sheet[["condition"]]))
+
+#if str($mode.type) == "test":
+reference <- "$mode.reference_level"
+if (nlevels(samps[["condition"]]) != 2) {
+    stop("Testing needs exactly two conditions; the sample table has ", nlevels(samps[["condition"]]), ": ",
+         paste(levels(samps[["condition"]]), collapse = ", "))
+}
+if (!reference %in% levels(samps[["condition"]])) {
+    stop("The reference condition '", reference, "' is not in the sample table's condition column (",
+         paste(levels(samps[["condition"]]), collapse = ", "), ")")
+}
+samps[["condition"]] <- relevel(samps[["condition"]], ref = reference)
+#end if
+
+gene <- tx2gene[["gene_id"]][match(rownames(cts), tx2gene[["tx"]])]
+if (all(is.na(gene))) {
+    stop("No transcript in the counts is in the transcript-to-gene table, e.g. ", paste(head(rownames(cts), 3), collapse = ", "))
+}
+if (anyNA(gene)) {
+    message("Dropping ", sum(is.na(gene)), " transcripts with no gene in the transcript-to-gene table, e.g. ",
+            paste(head(rownames(cts)[is.na(gene)], 3), collapse = ", "))
+}
+keep <- !is.na(gene) & rowSums(cts) > 0
+## transcripts never seen in any sample carry no information
+counts <- data.frame(gene_id = gene[keep], feature_id = rownames(cts)[keep], cts[keep, , drop = FALSE], check.names = FALSE)
+
+min_samps <- c(
+    min_samps_gene_expr = $filter.min_samps_gene_expr,
+    min_samps_feature_expr = $filter.min_samps_feature_expr,
+    min_samps_feature_prop = $filter.min_samps_feature_prop
+)
+if (any(min_samps > ncol(cts))) {
+    stop("The minimum sample counts (", paste(names(min_samps)[min_samps > ncol(cts)], collapse = ", "),
+         ") cannot exceed the number of samples, ", ncol(cts))
+}
+
+d <- dmDSdata(counts = counts, samples = samps)
+message("Before filtering: ", length(d), " genes, ", nrow(counts(d)), " transcripts")
+d <- tryCatch(
+    dmFilter(
+        d,
+        min_samps_gene_expr = $filter.min_samps_gene_expr,
+        min_gene_expr = $filter.min_gene_expr,
+        min_samps_feature_expr = $filter.min_samps_feature_expr,
+        min_feature_expr = $filter.min_feature_expr,
+        min_samps_feature_prop = $filter.min_samps_feature_prop,
+        min_feature_prop = $filter.min_feature_prop
+    ),
+    error = function(e) {
+        if (grepl("No genes left after filtering", conditionMessage(e))) {
+            stop("No gene kept two or more transcripts after filtering. Lower the thresholds or check the inputs.", call. = FALSE)
+        }
+        stop(e)
+    }
+)
+message("After filtering: ", length(d), " genes, ", nrow(counts(d)), " transcripts")
+
+write.table(DRIMSeq::samples(d), "samples.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(counts(d), "counts.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+
+#if str($mode.type) == "test":
+design <- model.matrix(~condition, data = DRIMSeq::samples(d))
+coef <- colnames(design)[2]
+## dmPrecision estimates its starting value on a random subset of genes
+set.seed(123)
+d <- dmPrecision(d, design = design, prec_moderation = "$mode.prec_moderation", BPPARAM = bpparam)
+d <- dmFit(d, design = design, BPPARAM = bpparam)
+d <- dmTest(d, coef = coef, BPPARAM = bpparam)
+write.table(results(d), "gene_results.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(results(d, level = "feature"), "transcript_results.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(proportions(d), "proportions.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+#end if
+
+#if str($output_rds) == "true":
+saveRDS(d, "drimseq.rds")
+#end if
+        ]]></configfile>
+    </configfiles>
+    <inputs>
+        <conditional name="input">
+            <param name="type" type="select" label="Transcript abundances">
+                <option value="quant" selected="true">Salmon or kallisto quantification files, imported with tximport</option>
+                <option value="matrix">Transcript count matrix</option>
+            </param>
+            <when value="quant">
+                <param name="quant_files" type="data" format="tabular" multiple="true" label="Quantification files"
+                    help="One per sample, e.g. Salmon quant.sf or kallisto abundance.tsv. The dataset (or collection element) names are the sample names."/>
+                <param name="quant_type" type="select" label="Quantification tool">
+                    <option value="salmon" selected="true">Salmon</option>
+                    <option value="kallisto">kallisto</option>
+                </param>
+                <param name="counts_from_abundance" type="select" label="Counts to use (tximport countsFromAbundance)"
+                    help="nf-core/rnasplice uses dtuScaledTPM for its DRIMSeq filter and DEXSeq DTU step">
+                    <option value="dtuScaledTPM" selected="true">dtuScaledTPM: TPM scaled by the median transcript length of the gene, then library size</option>
+                    <option value="scaledTPM">scaledTPM: TPM scaled to library size</option>
+                    <option value="no">Estimated counts as reported by the quantifier</option>
+                </param>
+            </when>
+            <when value="matrix">
+                <param name="counts_matrix" type="data" format="tabular" label="Transcript count matrix"
+                    help="Header line, transcript IDs in the first column and one column of counts per sample"/>
+            </when>
+        </conditional>
+        <param name="tx2gene" type="data" format="tabular" label="Transcript-to-gene table"
+            help="Transcript IDs in the first column and gene IDs in the second. A header line is optional."/>
+        <param name="samples" type="data" format="tabular,csv" label="Sample table"
+            help="Tab- or comma-separated with a header line containing 'sample' and 'condition' columns, e.g. the nf-core/rnasplice samplesheet. Other columns are ignored."/>
+        <section name="filter" title="Filtering thresholds (dmFilter)" expanded="true">
+            <param name="min_samps_gene_expr" type="integer" min="0" value="4" label="Minimum number of samples where the gene is expressed"
+                help="min_samps_gene_expr. The nf-core/rnasplice default is 4."/>
+            <param name="min_gene_expr" type="float" min="0" value="10" label="Minimum gene expression"
+                help="min_gene_expr: total transcript counts of the gene in a sample"/>
+            <param name="min_samps_feature_expr" type="integer" min="0" value="2" label="Minimum number of samples where the transcript is expressed"
+                help="min_samps_feature_expr"/>
+            <param name="min_feature_expr" type="float" min="0" value="10" label="Minimum transcript expression"
+                help="min_feature_expr: transcript counts in a sample"/>
+            <param name="min_samps_feature_prop" type="integer" min="0" value="2" label="Minimum number of samples where the transcript reaches the minimum proportion"
+                help="min_samps_feature_prop"/>
+            <param name="min_feature_prop" type="float" min="0" max="1" value="0.1" label="Minimum transcript proportion"
+                help="min_feature_prop: the transcript's share of its gene's counts in a sample"/>
+        </section>
+        <conditional name="mode">
+            <param name="type" type="select" label="Analysis"
+                help="nf-core/rnasplice only filters here and runs DEXSeq on the filtered counts">
+                <option value="filter" selected="true">Filter only</option>
+                <option value="test">Filter, then test for differential transcript usage between two conditions</option>
+            </param>
+            <when value="filter"/>
+            <when value="test">
+                <param name="reference_level" type="text" value="" label="Reference condition"
+                    help="The baseline value of the condition column. The sample table must have exactly two conditions.">
+                    <validator type="regex" message="Letters, digits, spaces, dots, plus signs, dashes and underscores only">^[\w .+-]+$</validator>
+                </param>
+                <param name="prec_moderation" type="select" label="Precision moderation"
+                    help="How per-gene precision estimates are shrunk (dmPrecision prec_moderation). Use common or none for very few genes.">
+                    <option value="trended" selected="true">Towards the trended precision</option>
+                    <option value="common">Towards the common precision</option>
+                    <option value="none">None</option>
+                </param>
+            </when>
+        </conditional>
+        <param name="output_rds" type="boolean" truevalue="true" falsevalue="false" checked="false" label="Output the DRIMSeq R object?"
+            help="dmDSdata after filtering, or dmDStest after testing, saved with saveRDS"/>
+    </inputs>
+    <outputs>
+        <data name="filtered_counts" format="tabular" from_work_dir="counts.tsv" label="${tool.name} on ${on_string}: filtered counts"/>
+        <data name="filtered_samples" format="tabular" from_work_dir="samples.tsv" label="${tool.name} on ${on_string}: samples"/>
+        <data name="gene_results" format="tabular" from_work_dir="gene_results.tsv" label="${tool.name} on ${on_string}: gene-level results">
+            <filter>mode['type'] == 'test'</filter>
+        </data>
+        <data name="transcript_results" format="tabular" from_work_dir="transcript_results.tsv" label="${tool.name} on ${on_string}: transcript-level results">
+            <filter>mode['type'] == 'test'</filter>
+        </data>
+        <data name="proportions" format="tabular" from_work_dir="proportions.tsv" label="${tool.name} on ${on_string}: fitted proportions">
+            <filter>mode['type'] == 'test'</filter>
+        </data>
+        <data name="rds" format="rds" from_work_dir="drimseq.rds" label="${tool.name} on ${on_string}: R object">
+            <filter>output_rds</filter>
+        </data>
+    </outputs>
+    <tests>
+        <!-- count matrix, rnasplice defaults: low, zero, low-proportion, low-gene and single-transcript cases all drop -->
+        <test expect_num_outputs="2">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples.tsv"/>
+            <output name="filtered_counts">
+                <assert_contents>
+                    <has_n_lines n="5"/>
+                    <has_line line="gene_id&#9;feature_id&#9;s1&#9;s2&#9;s3&#9;s4&#9;s5&#9;s6"/>
+                    <has_line line="geneA&#9;txA1&#9;102&#9;95&#9;110&#9;98&#9;105&#9;91"/>
+                    <has_line line="geneA&#9;txA2&#9;48&#9;55&#9;51&#9;50&#9;46&#9;53"/>
+                    <has_line line="geneB&#9;txB1&#9;210&#9;190&#9;205&#9;198&#9;215&#9;202"/>
+                    <has_line line="geneB&#9;txB3&#9;22&#9;18&#9;20&#9;61&#9;58&#9;64"/>
+                </assert_contents>
+            </output>
+            <output name="filtered_samples">
+                <assert_contents>
+                    <has_n_lines n="7"/>
+                    <has_line line="sample_id&#9;condition"/>
+                    <has_line line="s1&#9;control"/>
+                    <has_line line="s6&#9;treated"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- stricter proportion threshold drops txB3, which leaves geneB with one transcript -->
+        <test expect_num_outputs="2">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples.tsv"/>
+            <section name="filter">
+                <param name="min_samps_feature_prop" value="4"/>
+            </section>
+            <output name="filtered_counts">
+                <assert_contents>
+                    <has_n_lines n="3"/>
+                    <has_line_matching expression="geneA\ttxA1\t.*"/>
+                    <has_line_matching expression="geneA\ttxA2\t.*"/>
+                    <not_has_text text="geneB"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- Salmon files through tximport dtuScaledTPM, with an rnasplice-style CSV that has a duplicate lane row and an unused sample.
+             The files also hold an unmapped transcript named geneB, like a real gene: its placeholder gene must stay apart from geneB,
+             or its length would enter geneB's median and shift the txB2 counts asserted below.
+             txB2 is the shortest isoform of geneB, so length scaling lifts it above the 0.1 proportion it misses in raw counts -->
+        <test expect_num_outputs="3">
+            <conditional name="input">
+                <param name="type" value="quant"/>
+                <param name="quant_files" value="drimseq_quant_s1.sf,drimseq_quant_s2.sf,drimseq_quant_s3.sf,drimseq_quant_s4.sf,drimseq_quant_s5.sf,drimseq_quant_s6.sf" ftype="tabular"/>
+                <param name="quant_type" value="salmon"/>
+                <param name="counts_from_abundance" value="dtuScaledTPM"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samplesheet.csv" ftype="csv"/>
+            <param name="output_rds" value="true"/>
+            <output name="filtered_counts">
+                <assert_contents>
+                    <has_n_lines n="6"/>
+                    <has_line line="gene_id&#9;feature_id&#9;drimseq_quant_s1.sf&#9;drimseq_quant_s2.sf&#9;drimseq_quant_s3.sf&#9;drimseq_quant_s4.sf&#9;drimseq_quant_s5.sf&#9;drimseq_quant_s6.sf"/>
+                    <has_line_matching expression="geneA\ttxA1\t.*"/>
+                    <has_line_matching expression="geneA\ttxA2\t.*"/>
+                    <has_line_matching expression="geneB\ttxB1\t.*"/>
+                    <has_line_matching expression="geneB\ttxB2\t33\.79[0-9]*\t30\.83[0-9]*\t36\.48[0-9]*\t33\.60[0-9]*\t28\.24[0-9]*\t33\.58[0-9]*"/>
+                    <has_line_matching expression="geneB\ttxB3\t.*"/>
+                    <not_has_text text="txA3"/>
+                    <not_has_text text="geneC"/>
+                    <not_has_text text="geneD"/>
+                </assert_contents>
+            </output>
+            <output name="filtered_samples">
+                <assert_contents>
+                    <has_n_lines n="7"/>
+                    <has_line line="drimseq_quant_s4.sf&#9;treated"/>
+                </assert_contents>
+            </output>
+            <output name="rds">
+                <assert_contents>
+                    <has_size min="500"/>
+                </assert_contents>
+            </output>
+            <assert_stderr>
+                <has_text text="Ignoring sample table rows with no counts: s7_unused"/>
+                <has_text text="After filtering: 2 genes, 5 transcripts"/>
+                <has_text text="Dropping 1 transcripts with no gene in the transcript-to-gene table, e.g. geneB"/>
+            </assert_stderr>
+        </test>
+        <!-- kallisto estimated counts equal the matrix counts, so the survivors and values match the first test -->
+        <test expect_num_outputs="2">
+            <conditional name="input">
+                <param name="type" value="quant"/>
+                <param name="quant_files" value="drimseq_kallisto_s1.tsv,drimseq_kallisto_s2.tsv,drimseq_kallisto_s3.tsv,drimseq_kallisto_s4.tsv,drimseq_kallisto_s5.tsv,drimseq_kallisto_s6.tsv" ftype="tabular"/>
+                <param name="quant_type" value="kallisto"/>
+                <param name="counts_from_abundance" value="no"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples_kallisto.tsv"/>
+            <output name="filtered_counts">
+                <assert_contents>
+                    <has_n_lines n="5"/>
+                    <has_line line="geneA&#9;txA1&#9;102&#9;95&#9;110&#9;98&#9;105&#9;91"/>
+                    <has_line line="geneB&#9;txB3&#9;22&#9;18&#9;20&#9;61&#9;58&#9;64"/>
+                    <not_has_text text="txB2"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- write.table-style matrix (quoted, no header field for the IDs) with spaces in sample names,
+             and a sample table with padded conditions and an extra column -->
+        <test expect_num_outputs="2">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts_rnames.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples_spaces.tsv"/>
+            <output name="filtered_counts">
+                <assert_contents>
+                    <has_n_lines n="5"/>
+                    <has_line line="gene_id&#9;feature_id&#9;ctl_1&#9;ctl_2&#9;ctl_3&#9;trt_1&#9;trt_2&#9;trt_3"/>
+                    <has_line line="geneA&#9;txA1&#9;102&#9;95&#9;110&#9;98&#9;105&#9;91"/>
+                </assert_contents>
+            </output>
+            <output name="filtered_samples">
+                <assert_contents>
+                    <has_line line="ctl_1&#9;control"/>
+                    <has_line line="ctl_2&#9;control"/>
+                    <not_has_text text=" control"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- full DTU test: geneB switches towards txB3 in treated samples, geneA does not -->
+        <test expect_num_outputs="5">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples.tsv"/>
+            <conditional name="mode">
+                <param name="type" value="test"/>
+                <param name="reference_level" value="control"/>
+                <param name="prec_moderation" value="none"/>
+            </conditional>
+            <output name="filtered_counts">
+                <assert_contents>
+                    <has_n_lines n="5"/>
+                </assert_contents>
+            </output>
+            <output name="filtered_samples">
+                <assert_contents>
+                    <has_n_lines n="7"/>
+                </assert_contents>
+            </output>
+            <output name="gene_results">
+                <assert_contents>
+                    <has_n_lines n="3"/>
+                    <has_line_matching expression="gene_id\tlr\tdf\tpvalue\tadj_pvalue"/>
+                    <has_line_matching expression="geneA\t[0-9.e-]+\t1\t0\.9[0-9]*\t0\.9[0-9]*"/>
+                    <has_line_matching expression="geneB\t5[0-9]\.[0-9]+\t1\t[0-9.]+e-1[0-9]\t[0-9.]+e-1[0-9]"/>
+                </assert_contents>
+            </output>
+            <output name="transcript_results">
+                <assert_contents>
+                    <has_n_lines n="5"/>
+                    <has_line_matching expression="gene_id\tfeature_id\tlr\tdf\tpvalue\tadj_pvalue"/>
+                    <has_line_matching expression="geneB\ttxB3\t5[0-9]\.[0-9]+\t1\t[0-9.]+e-1[0-9]\t[0-9.]+e-1[0-9]"/>
+                </assert_contents>
+            </output>
+            <output name="proportions">
+                <assert_contents>
+                    <has_n_lines n="5"/>
+                    <has_line_matching expression="gene_id\tfeature_id\ts1\ts2\ts3\ts4\ts5\ts6"/>
+                    <has_line_matching expression="geneB\ttxB3(\t0\.090[0-9]*){3}(\t0\.229[0-9]*){3}"/>
+                </assert_contents>
+            </output>
+        </test>
+        <!-- a reference that is not one of the conditions fails with a readable message -->
+        <test expect_failure="true">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples.tsv"/>
+            <conditional name="mode">
+                <param name="type" value="test"/>
+                <param name="reference_level" value="untreated"/>
+            </conditional>
+            <assert_stderr>
+                <has_text text="The reference condition 'untreated' is not in the sample table"/>
+            </assert_stderr>
+        </test>
+        <!-- thresholds nothing passes give a readable message instead of DRIMSeq's own -->
+        <test expect_failure="true">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples.tsv"/>
+            <section name="filter">
+                <param name="min_gene_expr" value="100000"/>
+            </section>
+            <assert_stderr>
+                <has_text text="No gene kept two or more transcripts after filtering"/>
+            </assert_stderr>
+        </test>
+        <!-- two sample table names that clean to the same name are rejected rather than letting the first one win -->
+        <test expect_failure="true">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts_rnames.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples_collide.tsv"/>
+            <assert_stderr>
+                <has_text text="Different sample names in the sample table become the same after replacing unusual characters with underscores: ctl 1, ctl_1"/>
+            </assert_stderr>
+        </test>
+        <!-- repeated rows for one sample must agree on the condition -->
+        <test expect_failure="true">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples_conflict.tsv"/>
+            <assert_stderr>
+                <has_text text="The sample table gives different conditions for: s1"/>
+            </assert_stderr>
+        </test>
+        <!-- sample minimums above the number of samples fail before dmFilter's bare stopifnot -->
+        <test expect_failure="true">
+            <conditional name="input">
+                <param name="type" value="matrix"/>
+                <param name="counts_matrix" value="drimseq_counts.tsv"/>
+            </conditional>
+            <param name="tx2gene" value="drimseq_tx2gene.tsv"/>
+            <param name="samples" value="drimseq_samples.tsv"/>
+            <section name="filter">
+                <param name="min_samps_gene_expr" value="7"/>
+            </section>
+            <assert_stderr>
+                <has_text text="(min_samps_gene_expr) cannot exceed the number of samples, 6"/>
+            </assert_stderr>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+[DRIMSeq](https://bioconductor.org/packages/DRIMSeq) models the transcript counts of each gene with
+a Dirichlet-multinomial distribution to find differential transcript usage (DTU): changes in the
+relative proportions of a gene's transcripts between conditions.
+
+This tool runs DRIMSeq's `dmFilter` step, the transcript filter nf-core/rnasplice applies before
+its DEXSeq-based DTU analysis. It can then run the full DRIMSeq test (`dmPrecision`, `dmFit`,
+`dmTest`) for one condition with two levels.
+
+The filter keeps a gene only if both of these hold:
+
+- it has at least *minimum gene expression* counts in at least *minimum number of samples where
+  the gene is expressed*;
+- at least two of its transcripts survive the transcript filters.
+
+A transcript survives if it has at least *minimum transcript expression* counts in enough samples,
+and makes up at least *minimum transcript proportion* of its gene's counts in enough samples.
+Transcripts with zero counts in every sample are removed first. The defaults are those of
+nf-core/rnasplice. The three minimum sample numbers cannot exceed the number of samples.
+
+## Inputs
+
+### Transcript abundances
+
+Either of:
+
+- One Salmon `quant.sf` or kallisto `abundance.tsv` per sample. These are imported with tximport
+  at transcript level. nf-core/rnasplice uses `dtuScaledTPM` counts here. Pick a list collection,
+  e.g. the output of Salmon run over a collection: its element identifiers are the sample names.
+  Plain datasets are named by their history names, which rarely match a sample table.
+- A transcript count matrix with a header line, transcript IDs in the first column and one column
+  per sample. A header without a name for the ID column (R's `write.table` default) also works.
+
+### Transcript-to-gene table
+
+Transcript ID in column 1, gene ID in column 2. A header line is allowed. Transcripts without a
+gene are dropped with a message, as nf-core/rnasplice does for spike-ins and other extra sequences
+in the index.
+
+### Sample table
+
+Tab- or comma-separated, with a header line that contains `sample` and `condition` columns. The
+nf-core/rnasplice samplesheet works as is.
+
+- Every sample in the counts needs a row with a non-empty condition.
+- Rows for samples that are not in the counts are ignored.
+- A sample may appear on several rows (one per lane) only if they all give the same condition.
+- Characters other than letters, digits, `.`, `-` and `_` are replaced with `_` in sample names,
+  both in the sample table and in the counts, before the two are matched. Two different names
+  that become the same are an error.
+
+## Outputs
+
+Always:
+
+- **Filtered counts**: `gene_id`, `feature_id` and one column per sample, for the transcripts
+  that passed.
+- **Samples**: `sample_id` and `condition`.
+
+With testing enabled:
+
+- **Gene-level results**: likelihood ratio statistic, degrees of freedom, p-value and adjusted
+  p-value per gene.
+- **Transcript-level results**: the same per transcript, from DRIMSeq's beta-binomial model.
+- **Fitted proportions**: the estimated proportion of each transcript in each sample.
+
+On request:
+
+- **R object**: the DRIMSeq object (`dmDSdata` after filtering, `dmDStest` after testing) as an
+  RDS file.
+
+With `dtuScaledTPM` counts, the filtered counts match the table nf-core/rnasplice passes to
+DEXSeq, except that sample names are cleaned as described above.
+
+## Testing
+
+The reference condition is the baseline. The coefficient tested is the other condition against
+it, so the sample table must have exactly two conditions. For very small data sets, set precision
+moderation to *common* or *none*, because the trended estimate needs many genes.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.12688/f1000research.8900.2</citation>
+        <citation type="doi">10.12688/f1000research.7563.1</citation>
+    </citations>
+</tool>

@@ -1,0 +1,9 @@
+sample,fastq_1,fastq_2,strandedness,condition
+drimseq_quant_s1.sf,s1_R1.fq.gz,,reverse,control
+drimseq_quant_s2.sf,s2_R1.fq.gz,,reverse,control
+drimseq_quant_s3.sf,s3_R1.fq.gz,,reverse,control
+drimseq_quant_s4.sf,s4_R1.fq.gz,,reverse,treated
+drimseq_quant_s5.sf,s5_R1.fq.gz,,reverse,treated
+drimseq_quant_s6.sf,s6_R1.fq.gz,,reverse,treated
+drimseq_quant_s1.sf,s1_R1_lane2.fq.gz,,reverse,control
+s7_unused,s7_R1.fq.gz,,reverse,treated

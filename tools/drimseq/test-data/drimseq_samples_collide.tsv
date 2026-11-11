@@ -1,0 +1,8 @@
+sample	condition
+ctl 1	control
+ctl_1	treated
+ctl 2	control
+ctl 3	control
+trt 1	treated
+trt 2	treated
+trt 3	treated

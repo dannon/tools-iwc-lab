@@ -1,0 +1,7 @@
+sample	condition
+drimseq_kallisto_s1.tsv	control
+drimseq_kallisto_s2.tsv	control
+drimseq_kallisto_s3.tsv	control
+drimseq_kallisto_s4.tsv	treated
+drimseq_kallisto_s5.tsv	treated
+drimseq_kallisto_s6.tsv	treated
