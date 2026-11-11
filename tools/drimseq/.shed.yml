@@ -1,0 +1,16 @@
+name: drimseq
+owner: iwc-lab
+description: Differential transcript usage filtering and testing with DRIMSeq
+long_description: |
+  DRIMSeq models the transcript counts of each gene with a Dirichlet-multinomial distribution
+  to find differential transcript usage between conditions. The wrapper runs DRIMSeq's
+  transcript filter (dmFilter) as nf-core/rnasplice does before its DEXSeq-based DTU analysis,
+  importing Salmon or kallisto quantifications with tximport, and can optionally run the full
+  DRIMSeq test for a two-level condition.
+categories:
+- Transcriptomics
+- RNA
+- Statistics
+homepage_url: https://bioconductor.org/packages/DRIMSeq
+remote_repository_url: https://github.com/galaxyproject/tools-iwc-lab/tree/main/tools/drimseq
+type: unrestricted

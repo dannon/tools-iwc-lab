@@ -1,0 +1,56 @@
+<macros>
+    <token name="@TOOL_VERSION@">1.3.0</token>
+    <token name="@VERSION_SUFFIX@">0</token>
+    <token name="@PROFILE@">25.1</token>
+    <xml name="requirements">
+        <requirements>
+            <requirement type="package" version="@TOOL_VERSION@">samplot</requirement>
+        </requirements>
+    </xml>
+    <xml name="xrefs">
+        <xrefs>
+            <xref type="bio.tools">samplot</xref>
+        </xrefs>
+    </xml>
+    <xml name="citations">
+        <citations>
+            <citation type="doi">10.1186/s13059-021-02380-5</citation>
+        </citations>
+    </xml>
+    <!--
+        samplot opens alignments through pysam and insists on a .bam/.cram
+        extension with an index file sitting next to it, so stage each input
+        under a safe local name together with the index Galaxy already built.
+    -->
+    <token name="@LINK_ALIGNMENTS@"><![CDATA[
+#set $staged_alignments = []
+#for $i, $aln in enumerate($alignments)
+    #if $aln.is_of_type('cram')
+        #if not $reference
+            echo 'CRAM input needs the reference genome it was encoded against' >&2 && exit 1 &&
+        #end if
+        ln -s '$aln' 'sample_${i}.cram' &&
+        ln -s '$aln.metadata.cram_index' 'sample_${i}.cram.crai' &&
+        #silent $staged_alignments.append('sample_%s.cram' % $i)
+    #else
+        ln -s '$aln' 'sample_${i}.bam' &&
+        ln -s '$aln.metadata.bam_index' 'sample_${i}.bam.bai' &&
+        #silent $staged_alignments.append('sample_%s.bam' % $i)
+    #end if
+#end for
+#if $reference
+    ln -s '$reference' reference.fa &&
+#end if
+    ]]></token>
+    <token name="@REFERENCE_ARG@"><![CDATA[
+#if $reference
+    --reference reference.fa
+#end if
+    ]]></token>
+    <xml name="alignments_param">
+        <param name="alignments" type="data" format="bam,cram" multiple="true" label="Alignment files" help="Coordinate-sorted BAM or CRAM files, one per sample. Each sample gets its own panel in the plot."/>
+    </xml>
+    <xml name="reference_param">
+        <param argument="--reference" type="data" format="fasta" optional="true" label="Reference genome" help="Required when any of the alignments are CRAM. Must be the FASTA the CRAM files were encoded against."/>
+    </xml>
+</macros>

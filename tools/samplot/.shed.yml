@@ -1,0 +1,22 @@
+categories:
+- Variant Analysis
+- Visualization
+description: Samplot -- structural variant visualization from BAM/CRAM alignments
+long_description: |
+  Samplot creates images that display the read depth, discordant pairs and
+  split reads around a structural variant (SV) for one or more samples, so
+  that candidate SVs can be reviewed visually. "samplot plot" draws a single
+  region or breakpoint pair; "samplot vcf" draws every SV in a VCF that passes
+  a set of simple filters and builds an HTML index of the images.
+name: samplot
+owner: iwc-lab
+homepage_url: https://github.com/ryanlayer/samplot
+remote_repository_url: https://github.com/galaxyproject/tools-iwc-lab/tree/main/tools/samplot
+type: unrestricted
+auto_tool_repositories:
+  name_template: "{{ tool_id }}"
+  description_template: "Wrapper for the samplot tool suite: {{ tool_name }}"
+suite:
+  name: "suite_samplot"
+  description: "Samplot tools for plotting structural variants from BAM/CRAM alignments."
+  type: repository_suite_definition
