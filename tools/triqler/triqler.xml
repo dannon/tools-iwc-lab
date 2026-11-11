@@ -1,0 +1,329 @@
+<tool id="triqler" name="Triqler" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>protein quantification and differential abundance with integrated error rates</description>
+    <macros>
+        <token name="@TOOL_VERSION@">0.9.2</token>
+        <token name="@VERSION_SUFFIX@">0</token>
+        <token name="@PROFILE@">25.0</token>
+    </macros>
+    <requirements>
+        <requirement type="package" version="@TOOL_VERSION@">triqler</requirement>
+    </requirements>
+    <version_command><![CDATA[python -c "from importlib.metadata import version; print(version('triqler'))"]]></version_command>
+    <command detect_errors="aggressive"><![CDATA[
+## Triqler writes its peptide table next to the input and treats inputs ending
+## in .pqr.tsv as peptide tables, so stage the input under a fixed name.
+#if $input.is_of_type('tabular.gz'):
+    gunzip -c '$input' > input.tsv &&
+#else
+    ln -s '$input' input.tsv &&
+#end if
+mkdir results posteriors &&
+#if str($protein_name_separator) == 'auto':
+    ## Each separator setting silently misreads the other style of shared
+    ## peptide, so detect it: extra columns after the proteins column mean tab,
+    ## a semicolon inside it means semicolon (OpenMS and DIA-NN converters).
+    separator=\$(awk -F '\t' '
+        NR == 1 { col = 7; for (i = 1; i <= NF; i++) if (\$i == "linkPEP") col = 10; next }
+        NF > col { print "tab"; exit }
+        \$col ~ /;/ { print "semicolon"; exit }
+    ' input.tsv) &&
+#else
+    separator='$protein_name_separator' &&
+#end if
+if [ "\$separator" = semicolon ]; then
+    set -- --protein_name_separator ';';
+else
+    set --;
+fi &&
+triqler
+    --out_file results/proteins.tsv
+    --fold_change_eval $fold_change_eval
+    --decoy_pattern='$decoy_pattern'
+    "\$@"
+    --missing_value_prior '$missing_value_prior'
+    --min_samples $min_samples
+    --num_threads "\${GALAXY_SLOTS:-1}"
+    $output_options.write_protein_posteriors
+    $output_options.write_group_posteriors
+    $output_options.write_fold_change_posteriors
+    input.tsv &&
+## With exactly two conditions Triqler writes an unsuffixed file; give it the
+## same name it would get with more conditions so the collection is uniform.
+if [ -f results/proteins.tsv ]; then
+    mv results/proteins.tsv results/proteins.1vs2.tsv;
+fi &&
+## Triqler's csv writer ends lines with CRLF, which leaves a stray carriage
+## return in the last column for downstream tabular tools.
+for f in results/*.tsv posteriors/*.tsv input.tsv.pqr.tsv; do
+    if [ -f "\$f" ]; then
+        tr -d '\r' < "\$f" > "\$f.lf" && mv "\$f.lf" "\$f" || exit 1;
+    fi;
+done
+    ]]></command>
+    <inputs>
+        <param name="input" type="data" format="tabular,tabular.gz,csv" label="Triqler input table"
+            help="PSM or precursor table with the columns run, condition, charge, searchScore, intensity, peptide and proteins, for example from OpenMS TriqlerConverter. It must be tab-delimited, even when Galaxy labels it csv. Intensities must not be log transformed and decoy entries must be included."/>
+        <param argument="--fold_change_eval" type="float" min="0.2" value="1.0" label="Log2 fold change evaluation threshold"
+            help="Every protein is reported; this threshold sets the hypothesis behind the q-values, namely that the protein is correctly identified and its absolute log2 fold change exceeds this value. Triqler prints the minimum advisable threshold for the data in its log; values below about 0.2 are not meaningful."/>
+        <param argument="--decoy_pattern" type="text" value="decoy_" label="Decoy protein prefix"
+            help="Prefix that marks decoy protein accessions, for example decoy_ (Triqler's converters), DECOY_ (OpenMS DecoyDatabase default) or REV_. The job fails if no decoys match.">
+            <sanitizer>
+                <valid initial="string.ascii_letters,string.digits">
+                    <add value="_"/>
+                    <add value="-"/>
+                    <add value="."/>
+                    <add value="#"/>
+                    <add value="|"/>
+                </valid>
+            </sanitizer>
+            <validator type="regex" message="Enter a non-empty prefix without spaces or quotes that does not start with a dash.">^[A-Za-z0-9_.#|][A-Za-z0-9_.#|-]*$</validator>
+        </param>
+        <param argument="--protein_name_separator" type="select" label="Separator between protein accessions"
+            help="How peptides shared between proteins list their accessions: as extra tab-separated columns (Triqler's README format, MaxQuant and Quandenser converters) or joined by semicolons in one column (OpenMS TriqlerConverter, Triqler's DIA-NN converter). Triqler discards shared peptides, but only if it recognises them; with the wrong setting a shared peptide group is reported as if it were a protein. Detect reads the input and picks the style it finds.">
+            <option value="auto" selected="true">Detect from input</option>
+            <option value="tab">Tab (extra columns)</option>
+            <option value="semicolon">Semicolon (one column)</option>
+        </param>
+        <param argument="--missing_value_prior" type="select" label="Missing value prior"
+            help="The default fits the censored normal distribution to all observed intensities. Use DIA for data-independent acquisition data, which fits it to the means of the missing values instead.">
+            <option value="default" selected="true">Default (DDA)</option>
+            <option value="DIA">DIA</option>
+        </param>
+        <param argument="--min_samples" type="integer" min="2" value="2" label="Minimum number of samples a peptide must be quantified in"
+            help="Peptides quantified in fewer samples are discarded."/>
+        <section name="output_options" title="Additional outputs" expanded="false">
+            <param name="peptide_table" type="boolean" checked="false" label="Output peptide quantification table"
+                help="The peptide-level table Triqler builds from the input (its .pqr.tsv file)."/>
+            <param argument="--write_protein_posteriors" type="boolean" truevalue="--write_protein_posteriors posteriors/protein.tsv" falsevalue="" checked="false" label="Output protein expression posteriors"
+                help="Raw posterior distributions per protein and run. These tables are large: roughly 30 kb per protein and run."/>
+            <param argument="--write_group_posteriors" type="boolean" truevalue="--write_group_posteriors posteriors/group.tsv" falsevalue="" checked="false" label="Output treatment group posteriors"
+                help="Raw posterior distributions per protein and treatment group."/>
+            <param argument="--write_fold_change_posteriors" type="boolean" truevalue="--write_fold_change_posteriors posteriors/fold_change.tsv" falsevalue="" checked="false" label="Output fold change posteriors"
+                help="Raw posterior distributions of the log2 fold change per protein and pair of treatment groups."/>
+        </section>
+    </inputs>
+    <outputs>
+        <collection name="proteins" type="list" label="${tool.name} on ${on_string}: protein tables">
+            <discover_datasets pattern="proteins\.(?P&lt;designation&gt;\d+vs\d+)\.tsv" directory="results" format="tabular" sort_by="designation"/>
+        </collection>
+        <data name="peptide_table_out" format="tabular" from_work_dir="input.tsv.pqr.tsv" label="${tool.name} on ${on_string}: peptide table">
+            <filter>output_options['peptide_table']</filter>
+        </data>
+        <data name="protein_posteriors_out" format="tabular" from_work_dir="posteriors/protein.tsv" label="${tool.name} on ${on_string}: protein posteriors">
+            <filter>output_options['write_protein_posteriors']</filter>
+        </data>
+        <data name="group_posteriors_out" format="tabular" from_work_dir="posteriors/group.tsv" label="${tool.name} on ${on_string}: treatment group posteriors">
+            <filter>output_options['write_group_posteriors']</filter>
+        </data>
+        <data name="fold_change_posteriors_out" format="tabular" from_work_dir="posteriors/fold_change.tsv" label="${tool.name} on ${on_string}: fold change posteriors">
+            <filter>output_options['write_fold_change_posteriors']</filter>
+        </data>
+    </outputs>
+    <tests>
+        <!-- three conditions: one protein table per pair, plus the peptide table.
+             HPRR4320112_entrapment only has peptides shared via an extra tab column,
+             so detection must pick tab and the protein must vanish. -->
+        <test expect_num_outputs="2">
+            <param name="input" value="iprg2016_three_conditions.tsv" ftype="tabular"/>
+            <param name="fold_change_eval" value="0.8"/>
+            <section name="output_options">
+                <param name="peptide_table" value="true"/>
+            </section>
+            <output_collection name="proteins" type="list" count="3">
+                <element name="1vs2" ftype="tabular">
+                    <assert_contents>
+                        <has_line_matching expression="^q_value\tposterior_error_prob\tprotein\tnum_peptides\tprotein_id_posterior_error_prob\tlog2_fold_change\tdiff_exp_prob_0.8\t1:A\+B:A1.ms2\t.*\t3:A:C3.ms2\tpeptides$"/>
+                        <has_text text="HPRR1950515_poolA"/>
+                        <not_has_text text="HPRR4320112_entrapment"/>
+                        <has_n_lines min="10"/>
+                    </assert_contents>
+                </element>
+                <element name="1vs3" ftype="tabular">
+                    <assert_contents>
+                        <has_text text="diff_exp_prob_0.8"/>
+                        <has_n_lines min="10"/>
+                    </assert_contents>
+                </element>
+                <element name="2vs3" ftype="tabular">
+                    <assert_contents>
+                        <has_text text="diff_exp_prob_0.8"/>
+                        <has_n_lines min="10"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <output name="peptide_table_out" ftype="tabular">
+                <assert_contents>
+                    <has_line_matching expression="^combinedPEP\tcharge\tfeatureGroup\tspectrum\t1:A\+B:A1.ms2\t.*"/>
+                    <has_text text="HPRR1950515_poolA"/>
+                    <has_n_lines min="100"/>
+                </assert_contents>
+            </output>
+            <assert_stdout>
+                <not_has_text text="--protein_name_separator"/>
+            </assert_stdout>
+        </test>
+        <!-- two conditions from a csv-typed upload (as TriqlerConverter labels it), with all
+             posterior tables. HPRR4320112_entrapment's peptides are shared via a semicolon-joined
+             accession, so detection must pick semicolon and the protein must vanish. -->
+        <test expect_num_outputs="4">
+            <param name="input" value="iprg2016_two_conditions.tsv" ftype="csv"/>
+            <param name="min_samples" value="3"/>
+            <section name="output_options">
+                <param name="write_protein_posteriors" value="true"/>
+                <param name="write_group_posteriors" value="true"/>
+                <param name="write_fold_change_posteriors" value="true"/>
+            </section>
+            <output_collection name="proteins" type="list" count="1">
+                <element name="1vs2" ftype="tabular">
+                    <assert_contents>
+                        <has_line_matching expression="^q_value\t.*\tdiff_exp_prob_1.0\t1:A\+B:A1.ms2\t.*\t2:B:B3.ms2\tpeptides$"/>
+                        <has_text text="HPRR1950515_poolA"/>
+                        <not_has_text text="3:A"/>
+                        <not_has_text text="HPRR4320112_entrapment"/>
+                        <has_n_lines min="10"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <output name="protein_posteriors_out" ftype="tabular">
+                <assert_contents>
+                    <has_line_matching expression="^protein\tgroup:run\t.*"/>
+                    <has_text text="1:A+B:A1.ms2"/>
+                </assert_contents>
+            </output>
+            <output name="group_posteriors_out" ftype="tabular">
+                <assert_contents>
+                    <has_line_matching expression="^protein\tgroup\t.*"/>
+                    <has_text text="2:B"/>
+                </assert_contents>
+            </output>
+            <output name="fold_change_posteriors_out" ftype="tabular">
+                <assert_contents>
+                    <has_line_matching expression="^protein\tcomparison\t-10\t.*"/>
+                    <has_text text="1:A+B_vs_2:B"/>
+                </assert_contents>
+            </output>
+            <assert_stdout>
+                <has_text text="--protein_name_separator ;"/>
+                <has_text text="--min_samples 3"/>
+            </assert_stdout>
+        </test>
+        <!-- gzip-compressed input, DIA missing value prior, and an explicit separator
+             overriding detection: reading tab-style input as semicolon-joined keeps only
+             the first accession, so the shared-only protein reappears -->
+        <test expect_num_outputs="1">
+            <param name="input" value="iprg2016_three_conditions.tsv.gz" ftype="tabular.gz"/>
+            <param name="missing_value_prior" value="DIA"/>
+            <param name="protein_name_separator" value="semicolon"/>
+            <output_collection name="proteins" type="list" count="3">
+                <element name="2vs3" ftype="tabular">
+                    <assert_contents>
+                        <has_text text="diff_exp_prob_1.0"/>
+                        <has_text text="HPRR4320112_entrapment"/>
+                        <has_n_lines min="10"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <assert_stdout>
+                <has_text text="--missing_value_prior DIA"/>
+                <has_text text="--protein_name_separator ;"/>
+            </assert_stdout>
+        </test>
+        <!-- a decoy prefix that matches nothing must fail rather than report unchecked results.
+             The prefix uses every punctuation character the validator allows, and Triqler's
+             echo of its arguments shows it arrived as one unchanged argument. -->
+        <test expect_failure="true">
+            <param name="input" value="iprg2016_two_conditions.tsv" ftype="tabular"/>
+            <param name="decoy_pattern" value="REV_sp|x.#-"/>
+            <assert_stdout>
+                <has_text text="--decoy_pattern=REV_sp|x.#- --"/>
+            </assert_stdout>
+            <assert_stderr>
+                <has_text text="No decoy hits found"/>
+            </assert_stderr>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+Triqler (TRansparent Identification-Quantification-linked Error Rates) summarizes
+label-free mass spectrometry data to the protein level and tests for differential
+abundance between treatment groups. Instead of filtering at fixed identification
+thresholds and imputing missing values with point estimates, it propagates the
+identification and quantification error of every feature through a probabilistic
+graphical model and reports posterior probabilities for the fold change.
+
+It works with data-dependent (DDA) and data-independent (DIA) acquisition data.
+
+## Input
+
+A tab-delimited table with a header line and one PSM (or precursor) per line.
+The columns are shown aligned with spaces here; the real file separates them with tabs.
+
+```
+run  condition  charge  searchScore  intensity   peptide        proteins
+r1   1          2       1.345        21359.123   A.PEPTIDE.A    proteinA
+r2   1          2       1.945        24837.398   A.PEPTIDE.A    proteinA
+r3   2          2       1.684        25498.869   A.PEPTIDE.A    proteinA
+r1   1          3       0.452        13642.232   A.NTPEPTIDE.-  decoy_proteinA
+```
+
+- Intensities must **not** be log transformed. An intensity of 0 is treated as missing.
+- Higher search scores must mean higher confidence; calibrated scores such as
+  Percolator SVM scores work best.
+- Decoy PSMs are required, and their protein accessions must start with the decoy prefix.
+- Every condition needs at least two runs, and there must be at least two conditions.
+  Conditions are numbered by sorting their labels as plain text, so `10` sorts before
+  `2` and upper case before lower case. Labels such as `1:control` and `2:treated`
+  keep the numbering predictable.
+- Peptides shared between proteins are discarded. Their accessions are either extra
+  tab-separated columns or one column joined by semicolons (OpenMS TriqlerConverter and
+  Triqler's DIA-NN converter). By default the tool detects which style the input uses.
+
+Triqler also accepts an extended format with `spectrumId`, `linkPEP` and
+`featureClusterId` columns for match-between-runs probabilities; see the
+[project README](https://github.com/statisticalbiotechnology/triqler).
+
+OpenMS TriqlerConverter produces this format (Galaxy labels its output `csv`, but the
+content is tab-delimited, which is what Triqler needs). Gzip-compressed tabular
+input is decompressed before Triqler reads it.
+
+## Outputs
+
+**Protein tables** (a collection): one table per pair of conditions, named `1vs2`,
+`1vs3`, `2vs3` and so on, sorted as text (so `10vs11` comes before `1vs2`). With
+only two conditions the collection holds a single `1vs2` table.
+
+Columns:
+
+- `q_value` and `posterior_error_prob`: FDR and PEP for the combined hypothesis that the
+  protein is correctly identified *and* changes by more than the fold change threshold
+- `protein` and `num_peptides`: the protein accession and the number of peptides used for it
+- `protein_id_posterior_error_prob`: identification PEP alone
+- `log2_fold_change`: expected value of the fold change posterior
+- `diff_exp_prob_<threshold>`: probability that the absolute log2 fold change is below the
+  threshold
+- one column per run (`condition:run`) with the expected relative expression; 1.0 is the
+  protein's geometric mean across all runs, and these values are not log transformed
+- `peptides`: the peptides used
+
+Optional outputs: the peptide quantification table Triqler builds internally, and the
+raw protein, treatment group and fold change posterior distributions. The posterior
+tables are large.
+
+## Choosing the fold change threshold
+
+Do not set the threshold to 0 or a very small value. The fold change posterior always
+has some width, so even an unchanged protein spills over into small fold changes.
+Triqler prints the minimum advisable threshold for your data in the job's standard
+output.
+
+## More information
+
+See the [Triqler user manual](https://doi.org/10.1101/2020.09.24.311605) and the
+[project README](https://github.com/statisticalbiotechnology/triqler).
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1074/mcp.RA118.001018</citation>
+        <citation type="doi">10.1021/acs.jproteome.2c00607</citation>
+    </citations>
+</tool>

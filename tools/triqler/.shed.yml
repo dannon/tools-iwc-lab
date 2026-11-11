@@ -1,0 +1,14 @@
+name: triqler
+owner: iwc-lab
+description: Triqler protein quantification and differential abundance with integrated error rates
+long_description: |
+  Triqler is a probabilistic graphical model that propagates identification and
+  quantification error from the MS1 feature level up to the protein level, and
+  reports posterior probabilities for fold changes between treatment groups.
+  It works with DDA and DIA label-free data once the PSMs or precursors are in
+  Triqler's tab-delimited input format, for example from OpenMS TriqlerConverter.
+remote_repository_url: https://github.com/galaxyproject/tools-iwc-lab/tree/main/tools/triqler
+homepage_url: https://github.com/statisticalbiotechnology/triqler
+type: unrestricted
+categories:
+  - Proteomics
