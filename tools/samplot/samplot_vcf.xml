@@ -1,0 +1,311 @@
+<tool id="samplot_vcf" name="Samplot VCF" version="@TOOL_VERSION@+galaxy@VERSION_SUFFIX@" profile="@PROFILE@">
+    <description>plot every structural variant in a VCF</description>
+    <macros>
+        <import>macros.xml</import>
+    </macros>
+    <expand macro="xrefs"/>
+    <expand macro="requirements"/>
+    <required_files>
+        <include path="run_samplot_commands.py"/>
+    </required_files>
+    <version_command>samplot --version</version_command>
+    <command detect_errors="aggressive"><![CDATA[
+#import re
+#if str($sample_ids.source) == 'names'
+    #set $sample_names = [re.sub(r'\.(bam|cram)$', '', str(a.element_identifier)) for a in $alignments]
+    ## samplot keys a dict on these, so a repeated name would silently drop a sample
+    #if len(set($sample_names)) != len($sample_names)
+        echo 'Dataset names must be unique once a trailing .bam or .cram is removed' >&2 && exit 1 &&
+    #end if
+#end if
+@LINK_ALIGNMENTS@
+ln -s '$vcf' input.vcf &&
+#if $filters.important_regions
+    ## samplot reads every line as chrom/start/end, so drop headers and blank lines
+    awk 'NF >= 3 && !/^[#]/ && !/^(track|browser)([ \t]|$)/' '$filters.important_regions' > regions.bed &&
+#end if
+
+samplot vcf
+    --vcf input.vcf
+    --out-dir samplot-out
+    --output_type '$output_type'
+    --bams
+    #for $aln in $staged_alignments
+        '$aln'
+    #end for
+    #if str($sample_ids.source) == 'names'
+        --sample_ids
+        #for $name in $sample_names
+            '${name.replace("'", "'\\''")}'
+        #end for
+    #end if
+    $filters.plot_all
+    --min_bp $filters.min_bp
+    #if str($filters.max_mb)
+        --max_mb $filters.max_mb
+    #end if
+    #if str($filters.min_call_rate)
+        --min_call_rate $filters.min_call_rate
+    #end if
+    #if str($filters.max_hets)
+        --max_hets $filters.max_hets
+    #end if
+    --min_entries $filters.min_entries
+    --max_entries $filters.max_entries
+    #if $filters.important_regions
+        --important_regions regions.bed
+    #end if
+    ## an empty value turns the title fields off; leaving the flag out would restore the default
+    --format '$format'
+    --downsample $downsample
+    ## anything samplot vcf does not recognise is passed on to every samplot plot call
+    @REFERENCE_ARG@
+    --manual_run
+    --command_file samplot_commands.txt
+&& python '$__tool_directory__/run_samplot_commands.py' samplot_commands.txt samplot-out
+&& cp samplot-out/index.html '$index'
+&& mkdir -p '$index.files_path'
+&& find samplot-out -maxdepth 1 -name '*.${output_type}' -exec cp {} '$index.files_path' ';'
+    ]]></command>
+    <inputs>
+        <param argument="--vcf" type="data" format="vcf,vcf_bgzip" label="Structural variant calls" help="VCF with SVTYPE (and END) in the INFO column and one genotype column per sample."/>
+        <expand macro="alignments_param"/>
+        <expand macro="reference_param"/>
+        <conditional name="sample_ids">
+            <param name="source" type="select" label="Match alignment files to VCF samples by" help="samplot needs to know which alignment file belongs to which VCF sample column.">
+                <option value="rg" selected="true">Read group sample name (SM tag) in each alignment file</option>
+                <option value="names">Dataset names (a trailing .bam or .cram is dropped)</option>
+            </param>
+            <when value="rg"/>
+            <when value="names"/>
+        </conditional>
+        <section name="filters" title="Variant selection" expanded="false">
+            <param argument="--plot_all" type="boolean" truevalue="--plot_all" falsevalue="" checked="false" label="Plot all variants and samples" help="By default only variants with at least one non-reference genotype are plotted, with the carriers plus some reference samples as controls."/>
+            <param argument="--min_bp" type="integer" min="0" value="20" label="Minimum SV length (bp)" help="Skip variants shorter than this."/>
+            <param argument="--max_mb" type="integer" min="0" optional="true" value="" label="Maximum SV length (Mb)" help="Skip variants longer than this. No limit by default."/>
+            <param argument="--min_call_rate" type="float" min="0" max="1" optional="true" value="" label="Minimum call rate" help="Only plot variants called in at least this fraction of samples."/>
+            <param argument="--max_hets" type="integer" min="0" optional="true" value="" label="Maximum number of heterozygous samples" help="Skip common variants carried by more samples than this."/>
+            <param argument="--min_entries" type="integer" min="1" value="6" label="Minimum samples per plot" help="Add reference-genotype samples as controls until each plot has this many panels."/>
+            <param argument="--max_entries" type="integer" min="1" value="10" label="Maximum carriers per plot"/>
+            <param argument="--important_regions" type="data" format="bed" optional="true" label="Regions of interest" help="Only plot variants that overlap these BED regions."/>
+        </section>
+        <param argument="--format" type="text" value="AS,AP,DHFFC" label="FORMAT fields in panel titles" help="Comma-separated FORMAT fields to show next to each sample name. Clear it to show sample names only.">
+            <validator type="regex" message="Comma-separated FORMAT field names only">^[\w,]*$</validator>
+        </param>
+        <param argument="--downsample" type="integer" min="0" value="1" label="Normal pairs to plot" help="Number of concordant read pairs to draw per sample."/>
+        <param argument="--output_type" type="select" label="Image format">
+            <option value="png" selected="true">PNG</option>
+            <option value="pdf">PDF</option>
+            <option value="jpg">JPEG</option>
+        </param>
+    </inputs>
+    <outputs>
+        <collection name="plots" type="list" label="${tool.name} on ${on_string}: plots">
+            <discover_datasets pattern="(?P&lt;designation&gt;.+)\.(?P&lt;ext&gt;png|pdf|jpg)$" directory="samplot-out" sort_by="filename"/>
+        </collection>
+        <data name="index" format="html" label="${tool.name} on ${on_string}: HTML index"/>
+    </outputs>
+    <tests>
+        <!-- samples matched through the read group SM tag, default filters -->
+        <test expect_num_outputs="2">
+            <param name="vcf" value="sv.vcf" ftype="vcf"/>
+            <param name="alignments" value="deletion.bam,normal.bam" ftype="bam"/>
+            <output_collection name="plots" type="list" count="2">
+                <element name="DEL_chr1_4999_6000" ftype="png">
+                    <assert_contents>
+                        <has_image_width min="1000"/>
+                        <has_size min="20000"/>
+                    </assert_contents>
+                </element>
+                <element name="DEL_chr1_7999_8600" ftype="png">
+                    <assert_contents>
+                        <has_size min="20000"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <output name="index" ftype="html">
+                <assert_contents>
+                    <has_text text='"start": 4999'/>
+                    <has_text text='"end": 8600'/>
+                </assert_contents>
+                <extra_files type="file" name="DEL_chr1_4999_6000.png">
+                    <assert_contents>
+                        <has_size min="20000"/>
+                    </assert_contents>
+                </extra_files>
+                <extra_files type="file" name="DEL_chr1_7999_8600.png">
+                    <assert_contents>
+                        <has_size min="20000"/>
+                    </assert_contents>
+                </extra_files>
+            </output>
+        </test>
+        <!-- CRAM plus BAM, samples matched by dataset name, region filter, JPEG -->
+        <test expect_num_outputs="2">
+            <param name="vcf" value="sv.vcf" ftype="vcf"/>
+            <param name="alignments" value="deletion.cram,normal.bam"/>
+            <param name="reference" value="ref.fa" ftype="fasta"/>
+            <conditional name="sample_ids">
+                <param name="source" value="names"/>
+            </conditional>
+            <section name="filters">
+                <param name="important_regions" value="regions.bed" ftype="bed"/>
+                <param name="max_mb" value="1"/>
+            </section>
+            <param name="format" value=""/>
+            <param name="output_type" value="jpg"/>
+            <output_collection name="plots" type="list" count="1">
+                <element name="DEL_chr1_4999_6000" ftype="jpg">
+                    <assert_contents>
+                        <has_size min="20000"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <output name="index" ftype="html">
+                <assert_contents>
+                    <has_text text='"end": 6000'/>
+                    <not_has_text text='"end": 8600'/>
+                </assert_contents>
+            </output>
+            <assert_command>
+                <has_text text="--sample_ids"/>
+                <has_text text="'deletion'"/>
+                <has_text text="'normal'"/>
+                <has_text text="--reference reference.fa"/>
+            </assert_command>
+        </test>
+        <!-- a read group sample name with shell characters reaches samplot plot as plain text -->
+        <test expect_num_outputs="2">
+            <param name="vcf" value="sv_shell_chars.vcf" ftype="vcf"/>
+            <param name="alignments" value="deletion.bam,normal_shell_sm.bam" ftype="bam"/>
+            <output_collection name="plots" type="list" count="2">
+                <element name="DEL_chr1_7999_8600" ftype="png">
+                    <assert_contents>
+                        <has_size min="20000"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- dataset names are matched to VCF columns exactly, not after character replacement -->
+        <test expect_num_outputs="2">
+            <param name="vcf" value="sv_at.vcf" ftype="vcf"/>
+            <param name="alignments" value="x@y.bam" ftype="bam"/>
+            <conditional name="sample_ids">
+                <param name="source" value="names"/>
+            </conditional>
+            <output_collection name="plots" type="list" count="1">
+                <element name="DEL_chr1_7999_8600" ftype="png">
+                    <assert_contents>
+                        <has_size min="20000"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+            <assert_command>
+                <has_text text="--sample_ids 'x@y'"/>
+            </assert_command>
+        </test>
+        <!-- a contig whose name starts with "track" survives the BED header filter -->
+        <test expect_num_outputs="2">
+            <param name="vcf" value="sv_track1.vcf" ftype="vcf"/>
+            <param name="alignments" value="deletion_track1.bam" ftype="bam"/>
+            <section name="filters">
+                <param name="important_regions" value="regions_track1.bed" ftype="bed"/>
+            </section>
+            <output_collection name="plots" type="list" count="1">
+                <element name="DEL_track1_4999_6000" ftype="png">
+                    <assert_contents>
+                        <has_size min="20000"/>
+                    </assert_contents>
+                </element>
+            </output_collection>
+        </test>
+        <!-- two alignments that resolve to the same sample name are rejected -->
+        <test expect_failure="true">
+            <param name="vcf" value="sv.vcf" ftype="vcf"/>
+            <param name="alignments" value="deletion.bam,deletion.cram"/>
+            <param name="reference" value="ref.fa" ftype="fasta"/>
+            <conditional name="sample_ids">
+                <param name="source" value="names"/>
+            </conditional>
+            <assert_command>
+                <has_text text="Dataset names must be unique"/>
+            </assert_command>
+            <assert_stderr>
+                <has_text text="Dataset names must be unique"/>
+            </assert_stderr>
+        </test>
+        <!-- an SVTYPE that would add an option to the samplot plot call is refused, not run -->
+        <test expect_failure="true">
+            <param name="vcf" value="sv_option_svtype.vcf" ftype="vcf"/>
+            <param name="alignments" value="deletion.bam,normal.bam" ftype="bam"/>
+            <assert_stderr>
+                <has_text text="Refusing to run a samplot plot command (unexpected option --output_file)"/>
+            </assert_stderr>
+        </test>
+    </tests>
+    <help format="markdown"><![CDATA[
+## What it does
+
+Runs `samplot vcf`: for every structural variant (SV) in a VCF that passes
+the selection filters, samplot draws a plot of the alignment evidence (read
+depth, discordant pairs, split reads) for the samples that carry it, plus some
+reference-genotype samples as controls. This is the quick way to review a whole
+call set by eye.
+
+## Inputs
+
+- **Structural variant calls**: a VCF with `SVTYPE` and `END` in the INFO
+  column (as written by Manta, Lumpy/smoove, Delly, TIDDIT and most other SV
+  callers) and one genotype column per sample.
+- **Alignment files**: one BAM or CRAM per sample. samplot matches them to the
+  VCF sample columns either by the `SM` tag of the read group in each file,
+  or by the dataset names (handy with a collection whose element names are the
+  sample names).
+- **Reference genome**: only needed for CRAM input.
+
+### Matching by dataset name
+
+Each dataset name (minus a trailing `.bam` or `.cram`) must match a VCF sample
+column exactly.
+
+- Alignments whose name has no matching column are not plotted.
+- Two alignments with the same name are rejected.
+- Galaxy replaces unusual characters in dataset names (for example `~`) with
+  `X` before the tool sees them, so use read group matching for samples with
+  such names.
+
+### Unusual names in the VCF
+
+samplot passes sample names, chromosome names and SV types on to its plotting
+step separated by spaces.
+
+- A sample name containing a space loses its panel title.
+- If one of these values would be read as an extra samplot option (it starts
+  with a dash, or has a space followed by a dash), the job stops with a
+  `Refusing to run a samplot plot command` error instead of plotting.
+
+## Outputs
+
+- **Plots**: a collection with one image per plotted variant, named
+  `<SVTYPE>_<chrom>_<start>_<end>`.
+- **HTML index**: samplot's interactive table of the plotted variants, with
+  the images stored alongside it. The page loads its scripts from public
+  CDNs, so it only works when the Galaxy server lets this tool's HTML through
+  unsanitized; otherwise use the plot collection.
+
+## Variant selection
+
+Without *Plot all variants and samples*, only variants with at least one
+non-reference genotype are drawn. Each plot shows up to *Maximum carriers per
+plot* carriers, padded with reference samples up to *Minimum samples per
+plot*. Use the length, call-rate and region filters to focus on the variants
+you care about.
+
+samplot 1.3.0 does not draw translocations from a VCF: BND and TRA records
+are skipped or drawn as a single interval. Plot those with **Samplot plot**,
+which takes both breakpoints.
+
+For more detail see the [samplot documentation](https://github.com/ryanlayer/samplot).
+    ]]></help>
+    <expand macro="citations"/>
+</tool>
